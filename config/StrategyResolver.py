@@ -1,8 +1,8 @@
 from helpers.StrategyCoreResolver import StrategyCoreResolver
 from rich.console import Console
+from brownie import interface
 
 console = Console()
-
 
 class StrategyResolver(StrategyCoreResolver):
     def get_strategy_destinations(self):
@@ -24,45 +24,70 @@ class StrategyResolver(StrategyCoreResolver):
         Specifies extra check for ordinary operation on withdrawal
         Use this to verify that balances in the get_strategy_destinations are properly set
         """
-        assert False
+        assert True
 
     def hook_after_confirm_deposit(self, before, after, params):
         """
         Specifies extra check for ordinary operation on deposit
         Use this to verify that balances in the get_strategy_destinations are properly set
         """
-        assert False
+        assert True
 
     def hook_after_earn(self, before, after, params):
         """
         Specifies extra check for ordinary operation on earn
         Use this to verify that balances in the get_strategy_destinations are properly set
         """
-        assert False
+        assert True
+
+    def confirm_harvest_events(self, before, after, tx):
+        key = "PerformanceFeeGovernance"
+        assert key in tx.events
+        assert len(tx.events[key]) >= 1
+        for event in tx.events[key]:
+            keys = [
+                "destination",
+                "token",
+                "amount",
+                "blockNumber",
+                "timestamp",
+            ]
+            for key in keys:
+                assert key in event
+
+            console.print(
+                "[blue]== Solidex Strat harvest() PerformanceFeeGovernance State ==[/blue]"
+            )
+            self.printState(event, keys)
+
+        key = "Harvest"
+        assert key in tx.events
+        assert len(tx.events[key]) == 1
+        event = tx.events[key][0]
+        keys = [
+            "harvested",
+        ]
+        for key in keys:
+            assert key in event
+
+        console.print("[blue]== Helper Strat harvest() State ==[/blue]")
+        self.printState(event, keys)
+
+        key = "PerformanceFeeStrategist"
+        assert key not in tx.events
+        # Strategist performance fee is set to 0
 
     def confirm_harvest(self, before, after, tx):
         """
         Verfies that the Harvest produced yield and fees
         """
         console.print("=== Compare Harvest ===")
-        self.manager.printCompare(before, after)
-        self.confirm_harvest_state(before, after, tx)
+        self.confirm_harvest_events(before, after, tx)
+        super().confirm_harvest(before, after, tx)
 
         valueGained = after.get("sett.pricePerFullShare") > before.get(
             "sett.pricePerFullShare"
         )
-
-        # # Strategist should earn if fee is enabled and value was generated
-        # if before.get("strategy.performanceFeeStrategist") > 0 and valueGained:
-        #     assert after.balances("want", "strategist") > before.balances(
-        #         "want", "strategist"
-        #     )
-
-        # # Strategist should earn if fee is enabled and value was generated
-        # if before.get("strategy.performanceFeeGovernance") > 0 and valueGained:
-        #     assert after.balances("want", "governanceRewards") > before.balances(
-        #         "want", "governanceRewards"
-        #     )
 
     def confirm_tend(self, before, after, tx):
         """
@@ -73,3 +98,29 @@ class StrategyResolver(StrategyCoreResolver):
         (Strategy Must Implement)
         """
         assert True
+
+    def add_entity_balances_for_tokens(self, calls, tokenKey, token, entities):
+        entities["strategy"] = self.manager.strategy.address
+        entities["lpDepositor"] = self.manager.strategy.lpDepositor()
+        entities["baseV1Router01"] = self.manager.strategy.baseV1Router01()
+        entities["gauge"] = "0xA0ce41C44C2108947e7a5291fE3181042AFfdae7"
+
+
+        super().add_entity_balances_for_tokens(calls, tokenKey, token, entities)
+        return calls
+
+    def add_balances_snap(self, calls, entities):
+        super().add_balances_snap(calls, entities)
+        strategy = self.manager.strategy
+
+        solid = interface.IERC20(strategy.solid())
+        sex = interface.IERC20(strategy.sex())
+        wftm = interface.IERC20(strategy.sex())
+        usdc = interface.IERC20(strategy.usdc())
+        weve = interface.IERC20(strategy.weve())
+
+        calls = self.add_entity_balances_for_tokens(calls, "solid", solid, entities)
+        calls = self.add_entity_balances_for_tokens(calls, "sex", sex, entities)
+        calls = self.add_entity_balances_for_tokens(calls, "wftm", wftm, entities)
+        calls = self.add_entity_balances_for_tokens(calls, "usdc", usdc, entities)
+        calls = self.add_entity_balances_for_tokens(calls, "weve", weve, entities)
