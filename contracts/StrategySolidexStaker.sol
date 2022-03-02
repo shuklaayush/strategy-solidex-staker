@@ -18,7 +18,7 @@ import "../interfaces/solidly/IBaseV1Router01.sol";
 import {route} from "../interfaces/solidly/IBaseV1Router01.sol";
 import {BaseStrategy} from "../deps/BaseStrategy.sol";
 
-contract StrategySolidexWeveUsdc is BaseStrategy {
+contract StrategySolidexStaker is BaseStrategy {
     using SafeERC20Upgradeable for IERC20Upgradeable;
     using AddressUpgradeable for address;
     using SafeMathUpgradeable for uint256;
@@ -28,26 +28,32 @@ contract StrategySolidexWeveUsdc is BaseStrategy {
         ILpDepositor(0x26E1A0d851CF28E697870e1b7F053B605C8b060F);
 
     // Solidly
-    address public constant baseV1Router01 = 0xa38cd27185a464914D3046f0AB9d43356B34829D;
-
-    // Spookyswap
-    address public constant uniswapV02Router = 0xF491e7B69E4244ad4002BC14e878a34207E38c29; // Spookyswap
+    address public constant baseV1Router01 =
+        0xa38cd27185a464914D3046f0AB9d43356B34829D;
 
     // ===== Token Registry =====
 
-    IERC20Upgradeable public constant weve =
-        IERC20Upgradeable(0x911da02C1232A3c3E1418B834A311921143B04d7);
-    IERC20Upgradeable public constant usdc =
-        IERC20Upgradeable(0x04068DA6C83AFCFA0e13ba15A6696662335D5B75);
     IERC20Upgradeable public constant solid =
         IERC20Upgradeable(0x888EF71766ca594DED1F0FA3AE64eD2941740A20);
+    IERC20Upgradeable public constant solidSex =
+        IERC20Upgradeable(0x41adAc6C1Ff52C5e27568f27998d747F7b69795B);
+
     IERC20Upgradeable public constant sex =
         IERC20Upgradeable(0xD31Fcd1f7Ba190dBc75354046F6024A9b86014d7);
     IERC20Upgradeable public constant wftm =
         IERC20Upgradeable(0x21be370D5312f44cB42ce377BC9b8a0cEF1A4C83);
 
+    IERC20Upgradeable public constant solidSolidSexLp =
+        IERC20Upgradeable(0x62E2819Dd417F3b430B6fa5Fd34a49A377A02ac8);
+    IERC20Upgradeable public constant sexWftmLp =
+        IERC20Upgradeable(0xFCEC86aF8774d69e2e4412B8De3f4aBf1f671ecC);
+
     // Constants
     uint256 public constant MAX_BPS = 10000;
+
+    address public badgerTree;
+    ISettV4h public solidHelperVault;
+    ISettV4h public sexHelperVault;
 
     // slippage tolerance 0.5% (divide by MAX_BPS) - Changeable by Governance or Strategist
     uint256 public sl;
@@ -80,8 +86,8 @@ contract StrategySolidexWeveUsdc is BaseStrategy {
         address _controller,
         address _keeper,
         address _guardian,
-        address _want,
-        uint256[3] memory _feeConfig
+        address[3] calldata _wantConfig,
+        uint256[3] calldata _feeConfig
     ) public initializer {
         __BaseStrategy_init(
             _governance,
@@ -91,7 +97,9 @@ contract StrategySolidexWeveUsdc is BaseStrategy {
             _guardian
         );
         /// @dev Add config here
-        want = _want;
+        want = _wantConfig[0];
+        solidHelperVault = ISettV4h(_wantConfig[1]);
+        sexHelperVault = ISettV4h(_wantConfig[2]);
 
         performanceFeeGovernance = _feeConfig[0];
         performanceFeeStrategist = _feeConfig[1];
@@ -101,19 +109,28 @@ contract StrategySolidexWeveUsdc is BaseStrategy {
         sl = 50;
 
         /// @dev do one off approvals here
-        IERC20Upgradeable(want).safeApprove(address(lpDepositor), type(uint256).max);
-        solid.safeApprove(uniswapV02Router, type(uint256).max);
-        wftm.safeApprove(uniswapV02Router, type(uint256).max);
+        IERC20Upgradeable(want).safeApprove(
+            address(lpDepositor),
+            type(uint256).max
+        );
+
+        solid.safeApprove(baseV1Router01, type(uint256).max);
+        solidSex.safeApprove(baseV1Router01, type(uint256).max);
         sex.safeApprove(baseV1Router01, type(uint256).max);
-        weve.safeApprove(baseV1Router01, type(uint256).max);
-        usdc.safeApprove(baseV1Router01, type(uint256).max);
+        wftm.safeApprove(baseV1Router01, type(uint256).max);
+
+        solidSolidSexLp.safeApprove(
+            address(solidHelperVault),
+            type(uint256).max
+        );
+        sexWftmLp.safeApprove(address(sexHelperVault), type(uint256).max);
     }
 
     /// ===== View Functions =====
 
     // @dev Specify the name of the strategy
     function getName() external pure override returns (string memory) {
-        return "StrategySolidexWeveUsdc";
+        return "StrategySolidexStaker";
     }
 
     // @dev Specify the version of the Strategy, for upgrades
@@ -123,10 +140,7 @@ contract StrategySolidexWeveUsdc is BaseStrategy {
 
     /// @dev Balance of want currently held in strategy positions
     function balanceOfPool() public view override returns (uint256) {
-        return lpDepositor.userBalances(
-            address(this),
-            want
-        );
+        return lpDepositor.userBalances(address(this), want);
     }
 
     /// @dev Returns true if this strategy requires tending
@@ -142,11 +156,11 @@ contract StrategySolidexWeveUsdc is BaseStrategy {
         returns (address[] memory)
     {
         address[] memory protectedTokens = new address[](5);
-        protectedTokens[0] = want; // OXD/USDC LP
-        protectedTokens[1] = address(sex); // SEX
-        protectedTokens[2] = address(solid); // SOLID
-        protectedTokens[3] = address(weve); // WeVe
-        protectedTokens[4] = address(usdc); // USDC
+        protectedTokens[0] = want;
+        protectedTokens[1] = address(solid);
+        protectedTokens[2] = address(solidSex);
+        protectedTokens[3] = address(sex);
+        protectedTokens[4] = address(wftm);
         return protectedTokens;
     }
 
@@ -162,9 +176,10 @@ contract StrategySolidexWeveUsdc is BaseStrategy {
     function _onlyNotProtectedTokens(address _asset) internal override {
         address[] memory protectedTokens = getProtectedTokens();
 
-        for (uint256 x = 0; x < protectedTokens.length; x++) {
+        uint256 numTokens = protectedTokens.length;
+        for (uint256 i; i < numTokens; i++) {
             require(
-                address(protectedTokens[x]) != _asset,
+                address(protectedTokens[i]) != _asset,
                 "Asset is protected"
             );
         }
@@ -193,7 +208,7 @@ contract StrategySolidexWeveUsdc is BaseStrategy {
     }
 
     /// @dev Harvest from strategy mechanics, realizing increase in underlying position
-    function harvest() external whenNotPaused returns (uint256 harvested) {
+    function harvest() external whenNotPaused returns (uint256) {
         _onlyAuthorizedActors();
 
         uint256 _before = IERC20Upgradeable(want).balanceOf(address(this));
@@ -203,152 +218,165 @@ contract StrategySolidexWeveUsdc is BaseStrategy {
         pools[0] = want;
         lpDepositor.getReward(pools);
 
-        // 2. Swap all SOLID for wFTM on Spookyswap
+        // 2. Process SOLID into SOLID/SOLIDsex LP
         uint256 solidBalance = solid.balanceOf(address(this));
         if (solidBalance > 0) {
-            address[] memory path = new address[](2);
-            path[0] = address(solid);
-            path[1] = address(wftm);
-            _swapExactTokensForTokens_spooky(
-                uniswapV02Router,
-                solidBalance,
-                path
-            );
-        }
-
-        // 3. Swap all SEX for wFTM on Solidly
-        uint256 sexBalance = sex.balanceOf(address(this));
-        if (sexBalance > 0) {
-            _swapExactTokensForTokens_solidly(
-                baseV1Router01,
-                sexBalance,
-                route(address(sex), address(wftm), false) // False to use the volatile route
-            );
-        }
-
-        // 4. Swap all wFTM for USDC on Spookyswap
-        uint256 wftmBalance = wftm.balanceOf(address(this));
-        if (wftmBalance > 0) {
-            address[] memory path = new address[](2);
-            path[0] = address(wftm);
-            path[1] = address(usdc);
-            _swapExactTokensForTokens_spooky(
-                uniswapV02Router,
-                wftmBalance,
-                path
-            );
-
-            // 5. Swap half USDC for WeVe on Solidly
-            uint256 _half = usdc.balanceOf(address(this)).mul(5000).div(MAX_BPS);
-            _swapExactTokensForTokens_solidly(
+            // Swap half of SOLID for SOLIDsex
+            uint256 _half = solidBalance.mul(5000).div(MAX_BPS);
+            _swapExactTokensForTokens(
                 baseV1Router01,
                 _half,
-                route(address(usdc), address(weve), false) // False to use the volatile route
+                route(address(solid), address(solidSex), true) // True to use the stable route
             );
 
-            // 6. Provide liquidity for WeVe/USDC LP Pair
-            uint256 _weveIn = weve.balanceOf(address(this));
-            uint256 _usdcIn = usdc.balanceOf(address(this));
+            // Provide liquidity for SOLID/SOLIDsex LP pair
+            uint256 _solidIn = solid.balanceOf(address(this));
+            uint256 _solidSexIn = solidSex.balanceOf(address(this));
             IBaseV1Router01(baseV1Router01).addLiquidity(
-                address(weve),
-                address(usdc),
-                false, // Volatile
-                _weveIn,
-                _usdcIn,
-                _weveIn.mul(sl).div(MAX_BPS),
-                _usdcIn.mul(sl).div(MAX_BPS),
+                address(solid),
+                address(solidSex),
+                true, // Stable
+                _solidIn,
+                _solidSexIn,
+                _solidIn.mul(sl).div(MAX_BPS),
+                _solidSexIn.mul(sl).div(MAX_BPS),
                 address(this),
                 now
             );
+
+            _processRewardLpTokens(solidSolidSexLp, solidHelperVault);
         }
 
-        // 7. Compound WANT
-        uint256 earned =
-            IERC20Upgradeable(want).balanceOf(address(this)).sub(_before);
+        // 3. Process SEX into SEX/wFTM LP
+        uint256 sexBalance = sex.balanceOf(address(this));
+        if (sexBalance > 0) {
+            // Swap half of SEX for wFTM
+            uint256 _half = sexBalance.mul(5000).div(MAX_BPS);
+            _swapExactTokensForTokens(
+                baseV1Router01,
+                _half,
+                route(address(sex), address(wftm), false) // False to use the volatile route
+            );
 
-        /// Process fees
-        _processRewardsFees(earned, want);
+            // Provide liquidity for SEX/WFTM LP pair
+            uint256 _sexIn = sex.balanceOf(address(this));
+            uint256 _wftmIn = wftm.balanceOf(address(this));
+            IBaseV1Router01(baseV1Router01).addLiquidity(
+                address(sex),
+                address(wftm),
+                false, // Volatile
+                _sexIn,
+                _wftmIn,
+                _sexIn.mul(sl).div(MAX_BPS),
+                _wftmIn.mul(sl).div(MAX_BPS),
+                address(this),
+                now
+            );
 
-        uint256 earnedAfterFees =
-            IERC20Upgradeable(want).balanceOf(address(this)).sub(_before);
-
-        _deposit(earnedAfterFees);
+            _processRewardLpTokens(sexWftmLp, sexHelperVault);
+        }
 
         /// @dev Harvest event that every strategy MUST have, see BaseStrategy
-        emit Harvest(earnedAfterFees, block.number);
+        emit Harvest(0, block.number);
 
         /// @dev Harvest must return the amount of want increased
-        return earnedAfterFees;
+        return 0;
     }
 
     /// ===== Internal Helper Functions =====
 
+    function _depositForIntoHelper(
+        ISettV4h _helperVault,
+        address _recipient,
+        uint256 _amount
+    ) internal returns (uint256) {
+        uint256 helperVaultBefore = _helperVault.balanceOf(_recipient);
+
+        _helperVault.depositFor(_recipient, _amount);
+
+        uint256 helperVaultAfter = _helperVault.balanceOf(_recipient);
+
+        return helperVaultAfter.sub(helperVaultBefore);
+    }
+
     /// @dev used to manage the governance and strategist fee on earned rewards, make sure to use it to get paid!
-    function _processRewardsFees(uint256 _amount, address _token)
-        internal
-    {
-        if (performanceFeeGovernance > 0) {
-            uint256 governanceRewardsFee = _processFee(
-                _token,
-                _amount,
-                performanceFeeGovernance,
-                IController(controller).rewards()
+    function _processRewardLpTokens(
+        IERC20Upgradeable _lpToken,
+        ISettV4h _helperVault
+    ) internal {
+        // Desposit the rest of the LP for the Tree
+        uint256 lpBalance = _lpToken.balanceOf(address(this));
+
+        uint256 governanceFee = lpBalance.mul(performanceFeeGovernance).div(
+            MAX_FEE
+        );
+
+        if (governanceFee > 0) {
+            address treasury = IController(controller).rewards();
+            uint256 govVaultPositionGained = _depositForIntoHelper(
+                _helperVault,
+                treasury,
+                governanceFee
             );
 
             emit PerformanceFeeGovernance(
-                IController(controller).rewards(),
-                _token,
-                governanceRewardsFee,
+                treasury,
+                address(_helperVault),
+                govVaultPositionGained,
                 block.number,
                 block.timestamp
             );
         }
 
-        if (performanceFeeStrategist > 0) {
-            uint256 strategistRewardsFee = _processFee(
-                _token,
-                _amount,
-                performanceFeeStrategist,
-                strategist
+        uint256 strategistFee = lpBalance.mul(performanceFeeStrategist).div(
+            MAX_FEE
+        );
+
+        if (strategistFee > 0) {
+            uint256 strategistVaultPositionGained = _depositForIntoHelper(
+                _helperVault,
+                strategist,
+                strategistFee
             );
 
             emit PerformanceFeeStrategist(
                 strategist,
-                _token,
-                strategistRewardsFee,
+                address(_helperVault),
+                strategistVaultPositionGained,
                 block.number,
                 block.timestamp
             );
         }
-    }
 
-    function _swapExactTokensForTokens_solidly(
-        address router,
-        uint256 amountIn,
-        route memory routes
-    ) internal {
-        route[] memory _route = new route[](1);
-        _route[0] = routes;
-        IBaseV1Router01(router).swapExactTokensForTokens(
-            amountIn,
-            0,
-            _route,
-            address(this),
-            now
+        uint256 lpToTree = lpBalance.sub(governanceFee).sub(strategistFee);
+
+        uint256 treeVaultPositionGained = _depositForIntoHelper(
+            _helperVault,
+            badgerTree,
+            lpToTree
+        );
+
+        emit TreeDistribution(
+            address(_helperVault),
+            treeVaultPositionGained,
+            block.number,
+            block.timestamp
         );
     }
 
-    function _swapExactTokensForTokens_spooky(
-        address router,
-        uint256 balance,
-        address[] memory path
+    function _swapExactTokensForTokens(
+        address _router,
+        uint256 _amountIn,
+        route memory _route
     ) internal {
-        IUniswapRouterV2(router).swapExactTokensForTokens(
-            balance,
+        route[] memory routeArray = new route[](1);
+        routeArray[0] = _route;
+        IBaseV1Router01(_router).swapExactTokensForTokens(
+            _amountIn,
             0,
-            path,
+            routeArray,
             address(this),
-            now
+            block.timestamp
         );
     }
 }
