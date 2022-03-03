@@ -51,12 +51,10 @@ contract StrategySolidexStaker is BaseStrategy {
     ISettV4h public constant solidHelperVault = ISettV4h(0xC7cBF5a24caBA375C09cc824481F5508c644dF28);
     ISettV4h public constant sexHelperVault = ISettV4h(0x7cc6049a125388B51c530e51727A87aE101f6417);
 
+    address public constant badgerTree = 0x89122c767A5F543e663DB536b603123225bc3823;
+
     // Constants
     uint256 public constant MAX_BPS = 10000;
-
-    address public badgerTree;
-    ISettV4h public solidHelperVault;
-    ISettV4h public sexHelperVault;
 
     // slippage tolerance 0.5% (divide by MAX_BPS) - Changeable by Governance or Strategist
     uint256 public sl;
