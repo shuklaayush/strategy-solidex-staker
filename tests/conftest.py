@@ -89,6 +89,10 @@ def deploy(sett_config):
 
     assert want.balanceOf(deployer.address) > 0
 
+    for helper in [strategy.solidHelperVault(), strategy.sexHelperVault()]:
+        helper = interface.ISettV4h(helper)
+        helper.approveContractAccess(strategy, {"from": helper.governance()})
+
     return DotMap(
         governance=governance,
         deployer=deployer,
