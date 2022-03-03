@@ -48,6 +48,9 @@ contract StrategySolidexStaker is BaseStrategy {
     IERC20Upgradeable public constant sexWftmLp =
         IERC20Upgradeable(0xFCEC86aF8774d69e2e4412B8De3f4aBf1f671ecC);
 
+    ISettV4h public constant solidHelperVault = ISettV4h(0xC7cBF5a24caBA375C09cc824481F5508c644dF28);
+    ISettV4h public constant sexHelperVault = ISettV4h(0x7cc6049a125388B51c530e51727A87aE101f6417);
+
     // Constants
     uint256 public constant MAX_BPS = 10000;
 
@@ -86,7 +89,7 @@ contract StrategySolidexStaker is BaseStrategy {
         address _controller,
         address _keeper,
         address _guardian,
-        address[3] calldata _wantConfig,
+        address _want,
         uint256[3] calldata _feeConfig
     ) public initializer {
         __BaseStrategy_init(
@@ -97,9 +100,7 @@ contract StrategySolidexStaker is BaseStrategy {
             _guardian
         );
         /// @dev Add config here
-        want = _wantConfig[0];
-        solidHelperVault = ISettV4h(_wantConfig[1]);
-        sexHelperVault = ISettV4h(_wantConfig[2]);
+        want = _want;
 
         performanceFeeGovernance = _feeConfig[0];
         performanceFeeStrategist = _feeConfig[1];
