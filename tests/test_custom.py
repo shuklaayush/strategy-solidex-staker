@@ -141,8 +141,7 @@ def test_fee_configs(sett_id):
     except:
         assert True
 
-    ## The fees are in want
-    assert harvest.events["PerformanceFeeGovernance"][0]["token"] == strategy.want()
+    assert harvest.events["PerformanceFeeGovernance"][0]["token"] == strategy.solidHelperVault()
 
 
     chain.revert()
@@ -164,9 +163,8 @@ def test_fee_configs(sett_id):
         harvest.events["PerformanceFeeStrategist"][0]["amount"]
     )
 
-    ## The fees are in helper and want
-    assert harvest.events["PerformanceFeeGovernance"][0]["token"] == strategy.want()
-    assert harvest.events["PerformanceFeeStrategist"][0]["token"] == strategy.want()
+    assert harvest.events["PerformanceFeeGovernance"][0]["token"] == strategy.solidHelperVault()
+    assert harvest.events["PerformanceFeeStrategist"][0]["token"] == strategy.solidHelperVault()
 
 
     chain.revert()
@@ -187,5 +185,4 @@ def test_fee_configs(sett_id):
     except:
         assert True
 
-    ## The fees are in CRV and CVX
-    assert harvest.events["PerformanceFeeStrategist"][0]["token"] == strategy.want()
+    assert harvest.events["PerformanceFeeStrategist"][0]["token"] == strategy.solidHelperVault()

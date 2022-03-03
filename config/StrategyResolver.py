@@ -12,14 +12,24 @@ class StrategyResolver(StrategyCoreResolver):
         Track balances for all strategy implementations
         (Strategy Must Implement)
         """
-        # E.G
-        # strategy = self.manager.strategy
-        # return {
-        #     "gauge": strategy.gauge(),
-        #     "mintr": strategy.mintr(),
-        # }
+        strategy = self.manager.strategy
+        return {
+            "lpDepositor": strategy.lpDepositor(),
+            "router": strategy.router(),
+            "badgerTree": strategy.badgerTree(),
+        }
 
-        return {}
+    def add_balances_snap(self, calls, entities):
+        super().add_balances_snap(calls, entities)
+        strategy = self.manager.strategy
+
+        solidHelperVault = interface.IERC20(strategy.solidHelperVault())
+        sexHelperVault = interface.IERC20(strategy.sexHelperVault())
+
+        calls = self.add_entity_balances_for_tokens(calls, "solidHelperVault", solidHelperVault, entities)
+        calls = self.add_entity_balances_for_tokens(calls, "sexHelperVault", sexHelperVault, entities)
+
+        return calls
 
     def hook_after_confirm_withdraw(self, before, after, params):
         """
@@ -56,7 +66,8 @@ class StrategyResolver(StrategyCoreResolver):
     def confirm_harvest_events(self, before, after, tx):
         key = "PerformanceFeeGovernance"
         assert key in tx.events
-        assert len(tx.events[key]) >= 1
+        assert len(tx.events[key]) == 2
+
         for event in tx.events[key]:
             keys = [
                 "destination",
@@ -95,12 +106,33 @@ class StrategyResolver(StrategyCoreResolver):
         Verfies that the Harvest produced yield and fees
         """
         console.print("=== Compare Harvest ===")
-        self.confirm_harvest_events(before, after, tx)
         super().confirm_harvest(before, after, tx)
 
-        valueGained = after.get("sett.pricePerFullShare") > before.get(
+        assert after.get("sett.pricePerFullShare") == before.get(
             "sett.pricePerFullShare"
         )
+
+        assert tx.return_value == 0
+
+        self.confirm_harvest_events(before, after, tx)
+
+        for token in ["solidHelperVault", "sexHelperVault"]:
+            assert after.balances(token, "badgerTree") > before.balances(
+                token, "badgerTree"
+            )
+
+            # Strategist should earn if fee is enabled and value was generated
+            if before.get("strategy.performanceFeeStrategist") > 0:
+                assert after.balances(token, "strategist") > before.balances(
+                    token, "strategist"
+                )
+
+            # Governance should earn if fee is enabled and value was generated
+            if before.get("strategy.performanceFeeGovernance") > 0:
+                assert after.balances(token, "governanceRewards") > before.balances(
+                    token, "governanceRewards"
+                )
+
 
     def confirm_tend(self, before, after, tx):
         """
@@ -112,28 +144,3 @@ class StrategyResolver(StrategyCoreResolver):
         """
         assert True
 
-    def add_entity_balances_for_tokens(self, calls, tokenKey, token, entities):
-        entities["strategy"] = self.manager.strategy.address
-        entities["lpDepositor"] = self.manager.strategy.lpDepositor()
-        entities["baseV1Router01"] = self.manager.strategy.baseV1Router01()
-        entities["gauge"] = "0xA0ce41C44C2108947e7a5291fE3181042AFfdae7"
-
-
-        super().add_entity_balances_for_tokens(calls, tokenKey, token, entities)
-        return calls
-
-    def add_balances_snap(self, calls, entities):
-        super().add_balances_snap(calls, entities)
-        strategy = self.manager.strategy
-
-        solid = interface.IERC20(strategy.solid())
-        sex = interface.IERC20(strategy.sex())
-        wftm = interface.IERC20(strategy.sex())
-        usdc = interface.IERC20(strategy.usdc())
-        weve = interface.IERC20(strategy.weve())
-
-        calls = self.add_entity_balances_for_tokens(calls, "solid", solid, entities)
-        calls = self.add_entity_balances_for_tokens(calls, "sex", sex, entities)
-        calls = self.add_entity_balances_for_tokens(calls, "wftm", wftm, entities)
-        calls = self.add_entity_balances_for_tokens(calls, "usdc", usdc, entities)
-        calls = self.add_entity_balances_for_tokens(calls, "weve", weve, entities)

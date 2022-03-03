@@ -66,4 +66,4 @@ def test_is_profitable(sett_id):
     print("Ending Balance")
     print(ending_balance)
 
-    assert ending_balance > initial_balance_with_fees
+    assert ending_balance >= initial_balance_with_fees

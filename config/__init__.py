@@ -7,9 +7,33 @@ BADGER_DEV_MULTISIG = "0x4c56ee3295042f8A5dfC83e770a21c707CB46f5b"
 sett_config = DotMap(
     native = DotMap(
         weveUsdcLp = DotMap(
-            WANT = "0xD9A4108CBB40a12dE16dFFDc54aE5065878816d7",  ## WeVE/USDC LP
+            WANT = "0xD9A4108CBB40a12dE16dFFDc54aE5065878816d7",
             WHALE = "0xA0ce41C44C2108947e7a5291fE3181042AFfdae7"
-        )
+        ),
+        # crvWftmLp = DotMap(
+        #     WANT = "0xD9A4108CBB40a12dE16dFFDc54aE5065878816d7",
+        #     WHALE = "0xA0ce41C44C2108947e7a5291fE3181042AFfdae7"
+        # ),
+        # usdcMimLp = DotMap(
+        #     WANT = "0xD9A4108CBB40a12dE16dFFDc54aE5065878816d7",
+        #     WHALE = "0xA0ce41C44C2108947e7a5291fE3181042AFfdae7"
+        # ),
+        # booXboo = DotMap(
+        #     WANT = "0xD9A4108CBB40a12dE16dFFDc54aE5065878816d7",
+        #     WHALE = "0xA0ce41C44C2108947e7a5291fE3181042AFfdae7"
+        # ),
+        # screamWftm = DotMap(
+        #     WANT = "0xD9A4108CBB40a12dE16dFFDc54aE5065878816d7",
+        #     WHALE = "0xA0ce41C44C2108947e7a5291fE3181042AFfdae7"
+        # ),
+        # tombWftm = DotMap(
+        #     WANT = "0xD9A4108CBB40a12dE16dFFDc54aE5065878816d7",
+        #     WHALE = "0xA0ce41C44C2108947e7a5291fE3181042AFfdae7"
+        # ),
+        # wftmRenbtc = DotMap(
+        #     WANT = "0xD9A4108CBB40a12dE16dFFDc54aE5065878816d7",
+        #     WHALE = "0xA0ce41C44C2108947e7a5291fE3181042AFfdae7"
+        # )
     )
 )
 
