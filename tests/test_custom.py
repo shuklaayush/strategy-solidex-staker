@@ -63,11 +63,11 @@ def test_are_you_trying(sett_id):
 
     harvest = strategy.harvest({"from": deployer})
 
-    ## Assert perFee for governance is exactly 20% // Round because huge numbers
+    ## Assert perFee for governance is exactly 15% // Round because huge numbers
     assert approx(
         (
             harvest.events["PerformanceFeeGovernance"][0]["amount"]
-            + harvest.events["TreeDistribution"][0]["amount"]
+            + harvest.events["Harvest"][0]["harvested"]
         )
         * (FEES[0] / 10000),
         harvest.events["PerformanceFeeGovernance"][0]["amount"],

@@ -6,7 +6,7 @@ BADGER_DEV_MULTISIG = "0x4c56ee3295042f8A5dfC83e770a21c707CB46f5b"
 
 sett_config = DotMap(
     native = DotMap(
-        sexWftmLp = DotMap(
+        weveUsdcLp = DotMap(
             WANT = "0xD9A4108CBB40a12dE16dFFDc54aE5065878816d7",  ## WeVE/USDC LP
             LP_COMPONENT =  "0xD31Fcd1f7Ba190dBc75354046F6024A9b86014d7",  ## SEX
             REWARD_TOKEN = "0x888ef71766ca594ded1f0fa3ae64ed2941740a20",  ## SOLID
