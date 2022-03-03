@@ -3,6 +3,7 @@ from helpers.constants import MaxUint256
 from helpers.utils import (
     approx,
 )
+from helpers.SnapshotManager import SnapshotManager
 from config import sett_config, FEES
 import pytest
 from conftest import deploy
@@ -28,6 +29,9 @@ def test_are_you_trying(sett_id):
     sett = deployed.sett
     want = deployed.want
     strategy = deployed.strategy
+    controller = deployed.controller
+
+    snap = SnapshotManager(sett, strategy, controller, "StrategySnapshot")
 
     startingBalance = want.balanceOf(deployer)
 
@@ -60,29 +64,7 @@ def test_are_you_trying(sett_id):
     print("Rewards:", rewards)
 
     ## End Setup
-
-    harvest = strategy.harvest({"from": deployer})
-
-    ## Assert perFee for governance is exactly 15% // Round because huge numbers
-    assert approx(
-        (
-            harvest.events["PerformanceFeeGovernance"][0]["amount"]
-            + harvest.events["Harvest"][0]["harvested"]
-        )
-        * (FEES[0] / 10000),
-        harvest.events["PerformanceFeeGovernance"][0]["amount"],
-        1,
-    )
-
-    ## Fail if PerformanceFeeStrategist is fired
-    try:
-        harvest.events["PerformanceFeeStrategist"]
-        assert False
-    except:
-        assert True
-
-    ## The fee is in the want
-    assert harvest.events["PerformanceFeeGovernance"][0]["token"] == strategy.want()
+    snap.settHarvest({"from": deployer})
 
 
 @pytest.mark.parametrize(
