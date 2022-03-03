@@ -28,7 +28,7 @@ contract StrategySolidexStaker is BaseStrategy {
         ILpDepositor(0x26E1A0d851CF28E697870e1b7F053B605C8b060F);
 
     // Solidly
-    address public constant baseV1Router01 =
+    address public constant router =
         0xa38cd27185a464914D3046f0AB9d43356B34829D;
 
     // ===== Token Registry =====
@@ -116,10 +116,10 @@ contract StrategySolidexStaker is BaseStrategy {
             type(uint256).max
         );
 
-        solid.safeApprove(baseV1Router01, type(uint256).max);
-        solidSex.safeApprove(baseV1Router01, type(uint256).max);
-        sex.safeApprove(baseV1Router01, type(uint256).max);
-        wftm.safeApprove(baseV1Router01, type(uint256).max);
+        solid.safeApprove(router, type(uint256).max);
+        solidSex.safeApprove(router, type(uint256).max);
+        sex.safeApprove(router, type(uint256).max);
+        wftm.safeApprove(router, type(uint256).max);
 
         solidSolidSexLp.safeApprove(
             address(solidHelperVault),
@@ -224,7 +224,7 @@ contract StrategySolidexStaker is BaseStrategy {
             // Swap half of SOLID for SOLIDsex
             uint256 _half = solidBalance.mul(5000).div(MAX_BPS);
             _swapExactTokensForTokens(
-                baseV1Router01,
+                router,
                 _half,
                 route(address(solid), address(solidSex), true) // True to use the stable route
             );
@@ -232,7 +232,7 @@ contract StrategySolidexStaker is BaseStrategy {
             // Provide liquidity for SOLID/SOLIDsex LP pair
             uint256 _solidIn = solid.balanceOf(address(this));
             uint256 _solidSexIn = solidSex.balanceOf(address(this));
-            IBaseV1Router01(baseV1Router01).addLiquidity(
+            IBaseV1Router01(router).addLiquidity(
                 address(solid),
                 address(solidSex),
                 true, // Stable
@@ -253,7 +253,7 @@ contract StrategySolidexStaker is BaseStrategy {
             // Swap half of SEX for wFTM
             uint256 _half = sexBalance.mul(5000).div(MAX_BPS);
             _swapExactTokensForTokens(
-                baseV1Router01,
+                router,
                 _half,
                 route(address(sex), address(wftm), false) // False to use the volatile route
             );
@@ -261,7 +261,7 @@ contract StrategySolidexStaker is BaseStrategy {
             // Provide liquidity for SEX/WFTM LP pair
             uint256 _sexIn = sex.balanceOf(address(this));
             uint256 _wftmIn = wftm.balanceOf(address(this));
-            IBaseV1Router01(baseV1Router01).addLiquidity(
+            IBaseV1Router01(router).addLiquidity(
                 address(sex),
                 address(wftm),
                 false, // Volatile
