@@ -8,15 +8,10 @@ sett_config = DotMap(
     native = DotMap(
         weveUsdcLp = DotMap(
             WANT = "0xD9A4108CBB40a12dE16dFFDc54aE5065878816d7",  ## WeVE/USDC LP
-            LP_COMPONENT =  "0xD31Fcd1f7Ba190dBc75354046F6024A9b86014d7",  ## SEX
-            REWARD_TOKEN = "0x888ef71766ca594ded1f0fa3ae64ed2941740a20",  ## SOLID
             WHALE = "0xA0ce41C44C2108947e7a5291fE3181042AFfdae7"
         )
     )
 )
-
-# Wants
-WEVE_USDC_LP = "0xD9A4108CBB40a12dE16dFFDc54aE5065878816d7"
 
 ## Fees in Basis Points
 DEFAULT_GOV_PERFORMANCE_FEE = 1500

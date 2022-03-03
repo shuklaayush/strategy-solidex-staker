@@ -8,7 +8,6 @@ from brownie import (
 from config import (
     BADGER_DEV_MULTISIG,
     FEES,
-    WEVE_USDC_LP,
 )
 from dotmap import DotMap
 import pytest
