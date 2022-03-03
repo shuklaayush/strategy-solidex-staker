@@ -12,12 +12,15 @@ interface ILpDepositor {
 
     function withdraw(address pool, uint256 amount) external;
 
-    function userBalances(address user, address pool) external view returns (uint256);
+    function userBalances(address user, address pool)
+        external
+        view
+        returns (uint256);
 
     function getReward(address[] calldata pools) external;
 
-    function pendingRewards(
-        address account,
-        address[] calldata pools)
-    external view returns (Amounts[] memory pending);
+    function pendingRewards(address account, address[] calldata pools)
+        external
+        view
+        returns (Amounts[] memory pending);
 }

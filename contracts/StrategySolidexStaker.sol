@@ -48,10 +48,13 @@ contract StrategySolidexStaker is BaseStrategy {
     IERC20Upgradeable public constant sexWftmLp =
         IERC20Upgradeable(0xFCEC86aF8774d69e2e4412B8De3f4aBf1f671ecC);
 
-    ISettV4h public constant solidHelperVault = ISettV4h(0xC7cBF5a24caBA375C09cc824481F5508c644dF28);
-    ISettV4h public constant sexHelperVault = ISettV4h(0x7cc6049a125388B51c530e51727A87aE101f6417);
+    ISettV4h public constant solidHelperVault =
+        ISettV4h(0xC7cBF5a24caBA375C09cc824481F5508c644dF28);
+    ISettV4h public constant sexHelperVault =
+        ISettV4h(0x7cc6049a125388B51c530e51727A87aE101f6417);
 
-    address public constant badgerTree = 0x89122c767A5F543e663DB536b603123225bc3823;
+    address public constant badgerTree =
+        0x89122c767A5F543e663DB536b603123225bc3823;
 
     // Constants
     uint256 public constant MAX_BPS = 10000;
@@ -209,8 +212,6 @@ contract StrategySolidexStaker is BaseStrategy {
     /// @dev Harvest from strategy mechanics, realizing increase in underlying position
     function harvest() external whenNotPaused returns (uint256) {
         _onlyAuthorizedActors();
-
-        uint256 _before = IERC20Upgradeable(want).balanceOf(address(this));
 
         // 1. Claim rewards
         address[] memory pools = new address[](1);

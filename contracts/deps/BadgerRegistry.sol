@@ -8,7 +8,11 @@ contract BadgerRegistry {
     using EnumerableSet for EnumerableSet.AddressSet;
 
     //@dev is the vault at the experimental, guarded or open stage? Only for Prod Vaults
-    enum VaultStatus {experimental, guarded, open}
+    enum VaultStatus {
+        experimental,
+        guarded,
+        open
+    }
 
     struct VaultData {
         string version;
@@ -232,8 +236,8 @@ contract BadgerRegistry {
 
         for (uint256 x = 0; x < versionsCount; x++) {
             for (uint256 y = 0; y < 3; y++) {
-                uint256 length =
-                    productionVaults[versions[x]][VaultStatus(y)].length();
+                uint256 length = productionVaults[versions[x]][VaultStatus(y)]
+                    .length();
                 address[] memory list = new address[](length);
                 for (uint256 z = 0; z < length; z++) {
                     list[z] = productionVaults[versions[x]][VaultStatus(y)].at(
