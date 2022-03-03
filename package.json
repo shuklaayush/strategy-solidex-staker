@@ -1,25 +1,13 @@
 {
-  "name": "yearn-protocol",
-  "devDependencies": {
-    "@commitlint/cli": "^11.0.0",
-    "@commitlint/config-conventional": "^11.0.0",
-    "@nomiclabs/hardhat-etherscan": "^2.1.6",
-    "hardhat": "^2.4.1",
-    "ethlint": "^1.2.5",
-    "husky": "^4.3.0",
-    "prettier": "^2.1.2",
-    "prettier-plugin-solidity": "^1.0.0-alpha.57",
-    "pretty-quick": "^3.0.2"
-  },
   "scripts": {
-    "lint": "pretty-quick --pattern '**/*.*(sol|json)' --verbose",
-    "lint:check": "prettier --check **/*.sol **/*.json",
-    "lint:fix": "pretty-quick --pattern '**/*.*(sol|json)' --staged --verbose"
+    "prettier": "prettier --write '(contracts|interfaces)/**/*.sol'",
+    "prettier:list": "prettier --list-different '(contracts|interfaces)/**/*.sol'",
+    "prettier:check": "prettier --check '(contracts|interfaces)/**/*.sol'",
+    "lint:check": "yarn prettier:check"
   },
-  "husky": {
-    "hooks": {
-      "pre-commit": "yarn lint:fix",
-      "commit-msg": "commitlint -E HUSKY_GIT_PARAMS"
-    }
+  "devDependencies": {
+    "hardhat": "^2.8.2",
+    "prettier": "^2.5.1",
+    "prettier-plugin-solidity": "^1.0.0-beta.19"
   }
 }
