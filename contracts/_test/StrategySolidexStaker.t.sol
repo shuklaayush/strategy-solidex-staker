@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Unlicense
 pragma solidity ^0.6.11;
+pragma experimental ABIEncoderV2;
 
 import "ds-test/test.sol";
 import "forge-std/Vm.sol";
@@ -25,7 +26,7 @@ contract Config {
 
     uint256 public constant MAX_BPS = 10_000;
 
-    uint256 public constant PERFORMANCE_FEE_GOVERNANCE = 1500;
+    uint256 public constant PERFORMANCE_FEE_GOVERNANCE = 1_500;
     uint256 public constant PERFORMANCE_FEE_STRATEGIST = 0;
     uint256 public constant WITHDRAWAL_FEE = 10;
 
@@ -38,7 +39,46 @@ contract Config {
         0x89122c767A5F543e663DB536b603123225bc3823;
 }
 
-contract StrategySolidexStakerTest is DSTest, stdCheats, Config, SnapshotManager {
+contract MulticallRegistry {
+    mapping(uint256 => address) private addresses;
+
+    constructor() public {
+        addresses[1] = 0xeefBa1e63905eF1D7ACbA5a8513c70307C1cE441;
+        addresses[4] = 0x42Ad527de7d4e9d9d011aC45B31D8551f8Fe9821;
+        addresses[5] = 0x77dCa2C955b15e9dE4dbBCf1246B4B85b651e50e;
+        addresses[42] = 0x2cc8688C5f75E365aaEEb4ea8D6a480405A48D2A;
+        addresses[56] = 0xeC8c00dA6ce45341FB8c31653B598Ca0d8251804;
+        addresses[100] = 0xb5b692a88BDFc81ca69dcB1d924f59f0413A602a;
+        addresses[250] = 0xb828C456600857abd4ed6C32FAcc607bD0464F4F;
+        addresses[42161] = 0x7A7443F8c577d537f1d8cD4a629d40a3148Dd7ee;
+    }
+
+    function get(uint256 _chainId) public view returns (address multicall_) {
+        multicall_ = addresses[_chainId];
+        require(multicall_ != address(0), "Not in registry");
+    }
+}
+
+abstract contract Utils {
+    Vm constant vmUtils =
+        Vm(address(uint160(uint256(keccak256("hevm cheat code")))));
+
+    // TODO: Default to 99?
+    function getChainIdOfHead() public returns (uint256 chainId_) {
+        string[] memory inputs = new string[](2);
+        inputs[0] = "bash";
+        inputs[1] = "scripts/chain-id.sh";
+        chainId_ = abi.decode(vmUtils.ffi(inputs), (uint256));
+    }
+
+    // TODO: Deploy if not there?
+    function getMulticall() public returns (address multicall_) {
+        MulticallRegistry multicallRegistry = new MulticallRegistry();
+        multicall_ = multicallRegistry.get(getChainIdOfHead());
+    }
+}
+
+contract StrategySolidexStakerTest is DSTest, stdCheats, Utils, Config {
     using SafeMathUpgradeable for uint256;
 
     // ==============
@@ -46,7 +86,10 @@ contract StrategySolidexStakerTest is DSTest, stdCheats, Config, SnapshotManager
     // ==============
 
     Vm constant vm = Vm(HEVM_ADDRESS);
+
     ERC20Utils immutable erc20utils = new ERC20Utils();
+    SnapshotComparator immutable comparator =
+        new SnapshotComparator(getMulticall());
 
     // =====================
     // ===== Constants =====
@@ -172,6 +215,7 @@ contract StrategySolidexStakerTest is DSTest, stdCheats, Config, SnapshotManager
         assertEq(protectedTokens[4], address(strategy.wftm()));
     }
 
+    /*
     function testAreYouTrying() public {
         startingBalance = want.balanceOf(deployer);
         depositAmount = startingBalance.div(2);
@@ -197,7 +241,6 @@ contract StrategySolidexStakerTest is DSTest, stdCheats, Config, SnapshotManager
         harvest = strategy.harvest();
     }
 
-    /*
     function testPerformanceFees() public {
         startingBalance = want.balanceOf(deployer);
         depositAmount = startingBalance.div(2);
@@ -924,28 +967,38 @@ contract StrategySolidexStakerTest is DSTest, stdCheats, Config, SnapshotManager
     /// ============================
 
     function depositCheckedFrom(address _from, uint256 _amount) internal {
-        uint256 beforeWantBalanceOfFrom = WANT.balanceOf(_from);
-        uint256 beforeSettBalanceOfFrom = sett.balanceOf(_from);
-        uint256 beforeWantBalanceOfSett = WANT.balanceOf(address(sett));
+        comparator.addCall(
+            "want.balanceOf(from)",
+            address(WANT),
+            abi.encodeWithSignature("balanceOf(address)", _from)
+        );
+        comparator.addCall(
+            "want.balanceOf(sett)",
+            address(WANT),
+            abi.encodeWithSignature("balanceOf(address)", address(sett))
+        );
+        comparator.addCall(
+            "sett.balanceOf(from)",
+            address(sett),
+            abi.encodeWithSignature("balanceOf(address)", _from)
+        );
 
-        uint256 expectedShares = (_amount * 1e18) / sett.getPricePerFullShare();
+        uint256 expectedShares = _amount.mul(1e18).div(
+            sett.getPricePerFullShare()
+        );
 
+        comparator.snapPrev();
         vm.startPrank(_from);
 
         WANT.approve(address(sett), _amount);
         sett.deposit(_amount);
 
         vm.stopPrank();
+        comparator.snapCurr();
 
-        assertEq(WANT.balanceOf(_from), beforeWantBalanceOfFrom.sub(_amount));
-        assertEq(
-            sett.balanceOf(_from),
-            beforeSettBalanceOfFrom.add(expectedShares)
-        );
-        assertEq(
-            WANT.balanceOf(address(sett)),
-            beforeWantBalanceOfSett.add(_amount)
-        );
+        comparator.assertNegDiff("want.balanceOf(from)", _amount);
+        comparator.assertDiff("want.balanceOf(sett)", _amount);
+        comparator.assertDiff("sett.balanceOf(from)", expectedShares);
     }
 
     function depositChecked(uint256 _amount) internal {
@@ -953,73 +1006,104 @@ contract StrategySolidexStakerTest is DSTest, stdCheats, Config, SnapshotManager
     }
 
     function earnChecked() internal {
-        // TODO: Make calcs exact based on available()
-        uint256 beforeWantBalanceOfSett = WANT.balanceOf(address(sett));
-        uint256 beforeStrategyBalanceOfPool = strategy.balanceOfPool();
+        comparator.addCall(
+            "want.balanceOf(sett)",
+            address(WANT),
+            abi.encodeWithSignature("balanceOf(address)", address(sett))
+        );
+        comparator.addCall(
+            "strategy.balanceOfPool()",
+            address(strategy),
+            abi.encodeWithSignature("balanceOfPool()")
+        );
 
+        uint256 expectedEarn = WANT.balanceOf(address(sett)).mul(
+            MAX_BPS.sub(sett.min()).div(MAX_BPS)
+        );
+
+        comparator.snapPrev();
         vm.prank(keeper);
+
         sett.earn();
 
-        assertLt(WANT.balanceOf(address(sett)), beforeWantBalanceOfSett);
-        assertGt(strategy.balanceOfPool(), beforeStrategyBalanceOfPool);
+        comparator.snapCurr();
+
+        comparator.assertNegDiff("want.balanceOf(sett)", expectedEarn);
+        comparator.assertDiff("strategy.balanceOfPool()", expectedEarn);
     }
 
     function withdrawCheckedFrom(address _from, uint256 _shares) internal {
-        uint256 beforeSettBalanceOfFrom = sett.balanceOf(_from);
-        uint256 beforeWantBalanceOfFrom = WANT.balanceOf(_from);
-        uint256 beforeWantBalanceOfSett = WANT.balanceOf(address(sett));
-        uint256 beforeWantBalanceOfStrategy = WANT.balanceOf(address(strategy));
-        uint256 beforeWantBalanceOfTreasury = WANT.balanceOf(treasury);
-        uint256 beforeStrategyBalanceOfPool = strategy.balanceOfPool();
+        comparator.addCall(
+            "sett.balanceOf(from)",
+            address(sett),
+            abi.encodeWithSignature("balanceOf(address)", _from)
+        );
+        comparator.addCall(
+            "want.balanceOf(from)",
+            address(WANT),
+            abi.encodeWithSignature("balanceOf(address)", _from)
+        );
+        comparator.addCall(
+            "want.balanceOf(sett)",
+            address(WANT),
+            abi.encodeWithSignature("balanceOf(address)", address(sett))
+        );
+        comparator.addCall(
+            "want.balanceOf(strategy)",
+            address(WANT),
+            abi.encodeWithSignature("balanceOf(address)", address(strategy))
+        );
+        comparator.addCall(
+            "want.balanceOf(treasury)",
+            address(WANT),
+            abi.encodeWithSignature("balanceOf(address)", treasury)
+        );
+        comparator.addCall(
+            "strategy.balanceOfPool()",
+            address(strategy),
+            abi.encodeWithSignature("balanceOfPool()")
+        );
 
-        uint256 expectedAmount = (_shares * sett.getPricePerFullShare()) / 1e18;
+        uint256 expectedAmount = _shares.mul(sett.getPricePerFullShare()).div(
+            1e18
+        );
 
-        vm.startPrank(_from);
+        comparator.snapPrev();
+        vm.prank(_from);
 
         sett.withdraw(_shares);
 
-        vm.stopPrank();
+        comparator.snapCurr();
 
-        assertEq(sett.balanceOf(_from), beforeSettBalanceOfFrom.sub(_shares));
+        comparator.assertNegDiff("sett.balanceOf(from)", _shares);
 
-        if (expectedAmount <= beforeWantBalanceOfSett) {
-            assertEq(
-                WANT.balanceOf(address(sett)),
-                beforeWantBalanceOfSett.sub(expectedAmount)
-            );
-            assertEq(
-                WANT.balanceOf(_from),
-                beforeWantBalanceOfFrom.add(expectedAmount)
-            );
+        if (expectedAmount <= comparator.prev("want.balanceOf(sett)")) {
+            comparator.assertNegDiff("want.balanceOf(sett)", expectedAmount);
+            comparator.assertDiff("want.balanceOf(from)", expectedAmount);
         } else {
-            uint256 required = expectedAmount.sub(beforeWantBalanceOfSett);
+            uint256 required = expectedAmount.sub(
+                comparator.prev("want.balanceOf(sett)")
+            );
             uint256 fee = required.mul(strategy.withdrawalFee()).div(MAX_BPS);
 
-            if (required <= beforeWantBalanceOfStrategy) {
-                assertEq(WANT.balanceOf(address(sett)), 0);
-                assertEq(
-                    WANT.balanceOf(address(strategy)),
-                    beforeWantBalanceOfStrategy.sub(required)
-                );
+            if (required <= comparator.prev("want.balanceOf(strategy)")) {
+                assertEq(comparator.curr("want.balanceOf(sett)"), 0);
+                comparator.assertNegDiff("want.balanceOf(strategy)", required);
             } else {
-                required = required.sub(beforeWantBalanceOfStrategy);
-
-                assertEq(WANT.balanceOf(address(sett)), 0);
-                assertEq(WANT.balanceOf(address(strategy)), 0);
-                assertEq(
-                    strategy.balanceOfPool(),
-                    beforeStrategyBalanceOfPool.sub(required)
+                required = required.sub(
+                    comparator.prev("want.balanceOf(strategy)")
                 );
+
+                assertEq(comparator.curr("want.balanceOf(sett)"), 0);
+                assertEq(comparator.curr("want.balanceOf(strategy)"), 0);
+                comparator.assertNegDiff("strategy.balanceOfPool()", required);
             }
 
-            assertEq(
-                WANT.balanceOf(_from),
-                beforeWantBalanceOfFrom.add(expectedAmount).sub(fee)
+            comparator.assertDiff(
+                "want.balanceOf(from)",
+                expectedAmount.sub(fee)
             );
-            assertEq(
-                WANT.balanceOf(treasury),
-                beforeWantBalanceOfTreasury.add(fee)
-            );
+            comparator.assertDiff("want.balanceOf(treasury)", fee);
         }
     }
 
@@ -1032,24 +1116,47 @@ contract StrategySolidexStakerTest is DSTest, stdCheats, Config, SnapshotManager
         uint256 performanceFeeStrategist = strategy.performanceFeeStrategist();
 
         // TODO: There has to be a better way to do this
-        uint256 beforeSettPricePerFullShare = sett.getPricePerFullShare();
-        uint256 beforeStrategyBalanceOf = strategy.balanceOf();
-
-        uint256 beforeBSolidSolidSexBalanceOfGovernance = BSOLID_SOLIDSEX
-            .balanceOf(governance);
-        uint256 beforeBSolidSolidSexBalanceOfStrategist = BSOLID_SOLIDSEX
-            .balanceOf(strategist);
-        uint256 beforeBSolidSolidSexBalanceOfBadgerTree = BSOLID_SOLIDSEX
-            .balanceOf(BADGER_TREE);
-
-        uint256 beforeBSexWftmBalanceOfGovernance = BSEX_WFTM.balanceOf(
-            governance
+        comparator.addCall(
+            "sett.getPricePerFullShare()",
+            address(sett),
+            abi.encodeWithSignature("getPricePerFullShare()")
         );
-        uint256 beforeBSexWftmBalanceOfStrategist = BSEX_WFTM.balanceOf(
-            strategist
+        comparator.addCall(
+            "strategy.balanceOf()",
+            address(strategy),
+            abi.encodeWithSignature("balanceOf()")
         );
-        uint256 beforeBSexWftmBalanceOfBadgerTree = BSEX_WFTM.balanceOf(
-            BADGER_TREE
+
+        comparator.addCall(
+            "bSolidSolidSex.balanceOf(governance)",
+            address(BSOLID_SOLIDSEX),
+            abi.encodeWithSignature("balanceOf(address)", governance)
+        );
+        comparator.addCall(
+            "bSolidSolidSex.balanceOf(strategist)",
+            address(BSOLID_SOLIDSEX),
+            abi.encodeWithSignature("balanceOf(address)", strategist)
+        );
+        comparator.addCall(
+            "bSolidSolidSex.balanceOf(badgerTree)",
+            address(BSOLID_SOLIDSEX),
+            abi.encodeWithSignature("balanceOf(address)", BADGER_TREE)
+        );
+
+        comparator.addCall(
+            "bSexWftm.balanceOf(governance)",
+            address(BSEX_WFTM),
+            abi.encodeWithSignature("balanceOf(address)", governance)
+        );
+        comparator.addCall(
+            "bSexWftm.balanceOf(strategist)",
+            address(BSEX_WFTM),
+            abi.encodeWithSignature("balanceOf(address)", strategist)
+        );
+        comparator.addCall(
+            "bSexWftm.balanceOf(badgerTree)",
+            address(BSEX_WFTM),
+            abi.encodeWithSignature("balanceOf(address)", BADGER_TREE)
         );
 
         if (performanceFeeGovernance > 0) {
@@ -1092,112 +1199,276 @@ contract StrategySolidexStakerTest is DSTest, stdCheats, Config, SnapshotManager
             );
         }
 
+        comparator.snapPrev();
+
         vm.expectEmit(true, false, false, true);
         emit Harvest(0, block.number);
 
         uint256 harvested = strategy.harvest();
 
+        comparator.snapCurr();
+
         assertEq(harvested, 0);
-        assertEq(sett.getPricePerFullShare(), beforeSettPricePerFullShare);
-        assertEq(strategy.balanceOf(), beforeStrategyBalanceOf);
 
-        uint256 deltaBSolidSolidSexBalanceOfGovernance = BSOLID_SOLIDSEX
-            .balanceOf(governance)
-            .sub(beforeBSolidSolidSexBalanceOfGovernance);
-        uint256 deltaBSolidSolidSexBalanceOfStrategist = BSOLID_SOLIDSEX
-            .balanceOf(strategist)
-            .sub(beforeBSolidSolidSexBalanceOfStrategist);
-        uint256 deltaBSolidSolidSexBalanceOfBadgerTree = BSOLID_SOLIDSEX
-            .balanceOf(BADGER_TREE)
-            .sub(beforeBSolidSolidSexBalanceOfBadgerTree);
+        comparator.assertEq("sett.getPricePerFullShare()");
+        comparator.assertEq("strategy.balanceOf()");
 
-        uint256 bSolidSolidSexEmitted = deltaBSolidSolidSexBalanceOfGovernance
-            .add(deltaBSolidSolidSexBalanceOfStrategist)
-            .add(deltaBSolidSolidSexBalanceOfBadgerTree);
+        {
+            uint256 deltaBSolidSolidSexBalanceOfGovernance = comparator.diff(
+                "bSolidSolidSex.balanceOf(governance)"
+            );
+            uint256 deltaBSolidSolidSexBalanceOfStrategist = comparator.diff(
+                "bSolidSolidSex.balanceOf(strategist)"
+            );
+            uint256 deltaBSolidSolidSexBalanceOfBadgerTree = comparator.diff(
+                "bSolidSolidSex.balanceOf(badgerTree)"
+            );
 
-        uint256 deltaBSexWftmBalanceOfGovernance = BSEX_WFTM
-            .balanceOf(governance)
-            .sub(beforeBSexWftmBalanceOfGovernance);
-        uint256 deltaBSexWftmBalanceOfStrategist = BSEX_WFTM
-            .balanceOf(strategist)
-            .sub(beforeBSexWftmBalanceOfStrategist);
-        uint256 deltaBSexWftmBalanceOfBadgerTree = BSEX_WFTM
-            .balanceOf(BADGER_TREE)
-            .sub(beforeBSexWftmBalanceOfBadgerTree);
+            uint256 bSolidSolidSexEmitted = deltaBSolidSolidSexBalanceOfGovernance
+                    .add(deltaBSolidSolidSexBalanceOfStrategist)
+                    .add(deltaBSolidSolidSexBalanceOfBadgerTree);
 
-        uint256 bSexWftmEmitted = deltaBSexWftmBalanceOfGovernance
-            .add(deltaBSexWftmBalanceOfStrategist)
-            .add(deltaBSexWftmBalanceOfBadgerTree);
+            assertEq(
+                deltaBSolidSolidSexBalanceOfGovernance,
+                bSolidSolidSexEmitted.mul(performanceFeeGovernance).div(MAX_BPS)
+            );
+            assertEq(
+                deltaBSolidSolidSexBalanceOfStrategist,
+                bSolidSolidSexEmitted.mul(performanceFeeStrategist).div(MAX_BPS)
+            );
+            assertEq(
+                deltaBSolidSolidSexBalanceOfBadgerTree,
+                bSolidSolidSexEmitted.mul(
+                    MAX_BPS
+                        .sub(performanceFeeGovernance)
+                        .sub(performanceFeeStrategist)
+                        .div(MAX_BPS)
+                )
+            );
+        }
 
-        assertEq(
-            deltaBSolidSolidSexBalanceOfGovernance,
-            bSolidSolidSexEmitted.mul(performanceFeeGovernance).div(MAX_BPS)
-        );
-        assertEq(
-            deltaBSolidSolidSexBalanceOfStrategist,
-            bSolidSolidSexEmitted.mul(performanceFeeStrategist).div(MAX_BPS)
-        );
-        assertEq(
-            deltaBSolidSolidSexBalanceOfBadgerTree,
-            bSolidSolidSexEmitted.mul(
-                MAX_BPS
-                    .sub(performanceFeeGovernance)
-                    .sub(performanceFeeStrategist)
-                    .div(MAX_BPS)
-            )
-        );
+        {
+            uint256 deltaBSexWftmBalanceOfGovernance = comparator.diff(
+                "bSexWftm.balanceOf(governance)"
+            );
+            uint256 deltaBSexWftmBalanceOfStrategist = comparator.diff(
+                "bSexWftm.balanceOf(strategist)"
+            );
+            uint256 deltaBSexWftmBalanceOfBadgerTree = comparator.diff(
+                "bSexWftm.balanceOf(badgerTree)"
+            );
 
-        assertEq(
-            deltaBSexWftmBalanceOfGovernance,
-            bSexWftmEmitted.mul(performanceFeeGovernance).div(MAX_BPS)
-        );
-        assertEq(
-            deltaBSexWftmBalanceOfStrategist,
-            bSexWftmEmitted.mul(performanceFeeStrategist).div(MAX_BPS)
-        );
-        assertEq(
-            deltaBSexWftmBalanceOfBadgerTree,
-            bSexWftmEmitted.mul(
-                MAX_BPS
-                    .sub(performanceFeeGovernance)
-                    .sub(performanceFeeStrategist)
-                    .div(MAX_BPS)
-            )
-        );
+            uint256 bSexWftmEmitted = deltaBSexWftmBalanceOfGovernance
+                .add(deltaBSexWftmBalanceOfStrategist)
+                .add(deltaBSexWftmBalanceOfBadgerTree);
+
+            assertEq(
+                deltaBSexWftmBalanceOfGovernance,
+                bSexWftmEmitted.mul(performanceFeeGovernance).div(MAX_BPS)
+            );
+            assertEq(
+                deltaBSexWftmBalanceOfStrategist,
+                bSexWftmEmitted.mul(performanceFeeStrategist).div(MAX_BPS)
+            );
+            assertEq(
+                deltaBSexWftmBalanceOfBadgerTree,
+                bSexWftmEmitted.mul(
+                    MAX_BPS
+                        .sub(performanceFeeGovernance)
+                        .sub(performanceFeeStrategist)
+                        .div(MAX_BPS)
+                )
+            );
+        }
     }
 }
 
-contract SnapshotManager {
-    struct SnapshotTarget {
-      address who;
-      bytes data;
-    }
+// TODO: There has to be a better way to do this
 
-    struct SnapshotValue {
-      uint256 beforeVal;
-      uint256 afterVal;
-    }
+contract Snapshot {
+    mapping(string => uint256) private values;
+    mapping(string => bool) public exists;
 
-    string[] private snapshotKeys;
-
-    mapping(string => SnapshotKey) private snapshotTargets;
-    mapping(string => SnapshotValue) private snapshotValues;
-
-    function snapAdd(string calldata _key, address _who, bytes _data) public {
-        snapshotKeys.append(_key);
-        snapshotTargets[_key] = SnapshotTarget(_who, _data);
-        snapshotValues[_key].afterVal = _who.staticcall(_data);
-    }
-
-    function snapTake() public {
-        uint256 length = snapshotKeys.length;
-
+    constructor(string[] memory _keys, uint256[] memory _vals) public {
+        uint256 length = _keys.length;
         for (uint256 i; i < length; ++i) {
-            string memory key = snapshotKeys[i];
-            SnapshotTarget target = snapshotTargets[key];
-            snapshotValues[key].beforeVal = snapshotValues[key].afterVal;
-            snapshotValues[key].afterVal = target.who.staticcall(target.sig, target.data);
+            exists[_keys[i]] = true;
+            values[_keys[i]] = _vals[i];
         }
+    }
+
+    function valOf(string calldata _key) public view returns (uint256 val_) {
+        require(exists[_key], "Invalid key");
+        val_ = values[_key];
+    }
+}
+
+// TODO: Ideally a library
+contract SnapshotUtils is DSTest {
+    using SafeMathUpgradeable for uint256;
+
+    function diff(
+        Snapshot _snap1,
+        Snapshot _snap2,
+        string calldata _key
+    ) public view returns (uint256 val_) {
+        val_ = _snap1.valOf(_key).sub(_snap2.valOf(_key));
+    }
+
+    function assertEq(
+        Snapshot _snap1,
+        Snapshot _snap2,
+        string calldata _key
+    ) public {
+        assertEq(_snap1.valOf(_key), _snap2.valOf(_key));
+    }
+
+    function assertGt(
+        Snapshot _snap1,
+        Snapshot _snap2,
+        string calldata _key
+    ) public {
+        assertGt(_snap1.valOf(_key), _snap2.valOf(_key));
+    }
+
+    function assertLt(
+        Snapshot _snap1,
+        Snapshot _snap2,
+        string calldata _key
+    ) public {
+        assertLt(_snap1.valOf(_key), _snap2.valOf(_key));
+    }
+
+    function assertGe(
+        Snapshot _snap1,
+        Snapshot _snap2,
+        string calldata _key
+    ) public {
+        assertGe(_snap1.valOf(_key), _snap2.valOf(_key));
+    }
+
+    function assertLe(
+        Snapshot _snap1,
+        Snapshot _snap2,
+        string calldata _key
+    ) public {
+        assertLe(_snap1.valOf(_key), _snap2.valOf(_key));
+    }
+
+    function assertDiff(
+        Snapshot _snap1,
+        Snapshot _snap2,
+        string calldata _key,
+        uint256 _diff
+    ) public {
+        assertEq(_snap1.valOf(_key).sub(_snap2.valOf(_key)), _diff);
+    }
+}
+
+struct Call {
+    address target;
+    bytes callData;
+}
+
+interface IMulticall {
+    function aggregate(Call[] memory calls)
+        external
+        returns (uint256 blockNumber, bytes[] memory returnData);
+}
+
+contract SnapshotManager {
+    IMulticall multicall;
+
+    string[] private keys;
+    mapping(string => bool) public exists;
+
+    Call[] private calls;
+
+    constructor(address _multicall) public {
+        multicall = IMulticall(_multicall);
+    }
+
+    function addCall(
+        string calldata _key,
+        address _target,
+        bytes calldata _callData
+    ) public {
+        if (!exists[_key]) {
+            exists[_key] = true;
+            keys.push(_key);
+            calls.push(Call(_target, _callData));
+        }
+    }
+
+    function snap() public returns (Snapshot snap_) {
+        (, bytes[] memory rdata) = multicall.aggregate(calls);
+        uint256 length = rdata.length;
+
+        uint256[] memory vals = new uint256[](length);
+        for (uint256 i; i < length; ++i) {
+            vals[i] = abi.decode(rdata[i], (uint256));
+        }
+
+        snap_ = new Snapshot(keys, vals);
+    }
+}
+
+contract SnapshotComparator is SnapshotManager, SnapshotUtils {
+    Snapshot private sCurr;
+    Snapshot private sPrev;
+
+    constructor(address _multicall) public SnapshotManager(_multicall) {}
+
+    function snapPrev() public {
+        sPrev = snap();
+    }
+
+    function snapCurr() public {
+        sCurr = snap();
+    }
+
+    function curr(string calldata _key) public view returns (uint256 val_) {
+        val_ = sCurr.valOf(_key);
+    }
+
+    function prev(string calldata _key) public view returns (uint256 val_) {
+        val_ = sPrev.valOf(_key);
+    }
+
+    function diff(string calldata _key) public view returns (uint256 val_) {
+        val_ = sPrev.valOf(_key);
+    }
+
+    function negDiff(string calldata _key) public view returns (uint256 val_) {
+        val_ = diff(sPrev, sCurr, _key);
+    }
+
+    function assertEq(string calldata _key) public {
+        assertEq(sCurr, sPrev, _key);
+    }
+
+    function assertGt(string calldata _key) public {
+        assertGt(sCurr, sPrev, _key);
+    }
+
+    function assertLt(string calldata _key) public {
+        assertLt(sCurr, sPrev, _key);
+    }
+
+    function assertGe(string calldata _key) public {
+        assertGe(sCurr, sPrev, _key);
+    }
+
+    function assertLe(string calldata _key) public {
+        assertLe(sCurr, sPrev, _key);
+    }
+
+    function assertDiff(string calldata _key, uint256 _diff) public {
+        assertDiff(sCurr, sPrev, _key, _diff);
+    }
+
+    function assertNegDiff(string calldata _key, uint256 _diff) public {
+        assertDiff(sPrev, sCurr, _key, _diff);
     }
 }
 
