@@ -6,4 +6,3 @@ remappings = [
   'interfaces/=interfaces/',
   'deps/=deps/',
 ]
-eth-rpc-url = "https://rpc.fantom.network"
