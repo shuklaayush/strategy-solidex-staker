@@ -28,8 +28,7 @@ contract StrategySolidexStaker is BaseStrategy {
         ILpDepositor(0x26E1A0d851CF28E697870e1b7F053B605C8b060F);
 
     // Solidly
-    address public constant router =
-        0xa38cd27185a464914D3046f0AB9d43356B34829D;
+    address public constant router = 0xa38cd27185a464914D3046f0AB9d43356B34829D;
 
     // ===== Token Registry =====
 
