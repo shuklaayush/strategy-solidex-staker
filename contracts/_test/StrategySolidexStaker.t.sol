@@ -17,7 +17,7 @@ import {StrategySolidexStaker} from "../StrategySolidexStaker.sol";
 import {Controller} from "../deps/Controller.sol";
 import {SettV4} from "../deps/SettV4.sol";
 
-contract Config is MulticallUtils {
+abstract contract Config is MulticallUtils {
     IERC20Upgradeable public constant WANT =
         IERC20Upgradeable(0xC0240Ee4405f11EFb87A00B432A8be7b7Afc97CC);
 
@@ -397,7 +397,7 @@ contract StrategySolidexStakerTest is DSTest, stdCheats, Config {
     function testWithdrawAllFailsWhenPaused() public {
         vm.prank(address(controller));
         vm.expectRevert("Pausable: paused");
-        sett.withdrawAll();
+        strategy.withdrawAll();
     }
 
     function testGovernanceCanEarn() public {
@@ -912,7 +912,6 @@ contract StrategySolidexStakerTest is DSTest, stdCheats, Config {
 /*
 TODO:
 - No upgradeable in test contract
-- Refactor everything
 - Generalize
 - Add guestlist
 - Add proxy
