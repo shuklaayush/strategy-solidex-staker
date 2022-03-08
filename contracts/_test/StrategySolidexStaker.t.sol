@@ -2,20 +2,22 @@
 pragma solidity ^0.6.11;
 pragma experimental ABIEncoderV2;
 
-import "ds-test/test.sol";
-import "forge-std/Vm.sol";
-import "forge-std/stdlib.sol";
-import "./utils/ERC20Utils.sol";
+import {DSTest} from "ds-test/test.sol";
+import {Vm} from "forge-std/Vm.sol";
+import {stdCheats} from "forge-std/stdlib.sol";
+import {ERC20Utils} from "./utils/ERC20Utils.sol";
+import {MulticallUtils} from "./utils/MulticallUtils.sol";
+import {SnapshotComparator} from "./utils/Snapshot.sol";
 
-import "../../deps/@openzeppelin/contracts-upgradeable/token/ERC20/IERC20Upgradeable.sol";
-import "../../deps/@openzeppelin/contracts-upgradeable/math/SafeMathUpgradeable.sol";
-import "../../interfaces/badger/ISettV4h.sol";
+import {IERC20Upgradeable} from "../../deps/@openzeppelin/contracts-upgradeable/token/ERC20/IERC20Upgradeable.sol";
+import {SafeMathUpgradeable} from "../../deps/@openzeppelin/contracts-upgradeable/math/SafeMathUpgradeable.sol";
+import {ISettV4h} from "../../interfaces/badger/ISettV4h.sol";
 
-import "../StrategySolidexStaker.sol";
-import "../deps/Controller.sol";
-import "../deps/SettV4.sol";
+import {StrategySolidexStaker} from "../StrategySolidexStaker.sol";
+import {Controller} from "../deps/Controller.sol";
+import {SettV4} from "../deps/SettV4.sol";
 
-contract Config {
+contract Config is MulticallUtils {
     IERC20Upgradeable public constant WANT =
         IERC20Upgradeable(0xC0240Ee4405f11EFb87A00B432A8be7b7Afc97CC);
 
@@ -23,8 +25,6 @@ contract Config {
         ISettV4h(0xC7cBF5a24caBA375C09cc824481F5508c644dF28);
     ISettV4h public constant BSEX_WFTM =
         ISettV4h(0x7cc6049a125388B51c530e51727A87aE101f6417);
-
-    uint256 public constant MAX_BPS = 10_000;
 
     uint256 public constant PERFORMANCE_FEE_GOVERNANCE = 1_500;
     uint256 public constant PERFORMANCE_FEE_STRATEGIST = 0;
@@ -37,48 +37,11 @@ contract Config {
         0x4c56ee3295042f8A5dfC83e770a21c707CB46f5b;
     address public constant BADGER_TREE =
         0x89122c767A5F543e663DB536b603123225bc3823;
+
+    address public immutable MULTICALL = getMulticall();
 }
 
-contract MulticallRegistry {
-    mapping(uint256 => address) private addresses;
-
-    constructor() public {
-        addresses[1] = 0xeefBa1e63905eF1D7ACbA5a8513c70307C1cE441;
-        addresses[4] = 0x42Ad527de7d4e9d9d011aC45B31D8551f8Fe9821;
-        addresses[5] = 0x77dCa2C955b15e9dE4dbBCf1246B4B85b651e50e;
-        addresses[42] = 0x2cc8688C5f75E365aaEEb4ea8D6a480405A48D2A;
-        addresses[56] = 0xeC8c00dA6ce45341FB8c31653B598Ca0d8251804;
-        addresses[100] = 0xb5b692a88BDFc81ca69dcB1d924f59f0413A602a;
-        addresses[250] = 0xb828C456600857abd4ed6C32FAcc607bD0464F4F;
-        addresses[42161] = 0x7A7443F8c577d537f1d8cD4a629d40a3148Dd7ee;
-    }
-
-    function get(uint256 _chainId) public view returns (address multicall_) {
-        multicall_ = addresses[_chainId];
-        require(multicall_ != address(0), "Not in registry");
-    }
-}
-
-abstract contract Utils {
-    Vm constant vmUtils =
-        Vm(address(uint160(uint256(keccak256("hevm cheat code")))));
-
-    // TODO: Default to 99?
-    function getChainIdOfHead() public returns (uint256 chainId_) {
-        string[] memory inputs = new string[](2);
-        inputs[0] = "bash";
-        inputs[1] = "scripts/chain-id.sh";
-        chainId_ = abi.decode(vmUtils.ffi(inputs), (uint256));
-    }
-
-    // TODO: Deploy if not there?
-    function getMulticall() public returns (address multicall_) {
-        MulticallRegistry multicallRegistry = new MulticallRegistry();
-        multicall_ = multicallRegistry.get(getChainIdOfHead());
-    }
-}
-
-contract StrategySolidexStakerTest is DSTest, stdCheats, Utils, Config {
+contract StrategySolidexStakerTest is DSTest, stdCheats, Config {
     using SafeMathUpgradeable for uint256;
 
     // ==============
@@ -88,8 +51,7 @@ contract StrategySolidexStakerTest is DSTest, stdCheats, Utils, Config {
     Vm constant vm = Vm(HEVM_ADDRESS);
 
     ERC20Utils immutable erc20utils = new ERC20Utils();
-    SnapshotComparator immutable comparator =
-        new SnapshotComparator(getMulticall());
+    SnapshotComparator comparator;
 
     // =====================
     // ===== Constants =====
@@ -106,6 +68,9 @@ contract StrategySolidexStakerTest is DSTest, stdCheats, Utils, Config {
         address(uint160(uint256(keccak256("treasury"))));
 
     address constant rando = address(uint160(uint256(keccak256("rando"))));
+
+    uint256 public constant MAX_BPS = 10_000;
+    uint256 public constant AMOUNT_TO_MINT = 10e18;
 
     // =================
     // ===== State =====
@@ -180,11 +145,17 @@ contract StrategySolidexStakerTest is DSTest, stdCheats, Utils, Config {
 
         controller.approveStrategy(address(WANT), address(strategy));
         controller.setStrategy(address(WANT), address(strategy));
-
         vm.stopPrank();
 
-        // TODO: No magic var
-        erc20utils.forceMint(address(WANT), 10e18);
+        vm.prank(BSOLID_SOLIDSEX.governance());
+        BSOLID_SOLIDSEX.approveContractAccess(address(strategy));
+
+        vm.prank(BSEX_WFTM.governance());
+        BSEX_WFTM.approveContractAccess(address(strategy));
+
+        erc20utils.forceMint(address(WANT), AMOUNT_TO_MINT);
+
+        comparator = new SnapshotComparator(MULTICALL);
     }
 
     // ======================
@@ -215,758 +186,370 @@ contract StrategySolidexStakerTest is DSTest, stdCheats, Utils, Config {
         assertEq(protectedTokens[4], address(strategy.wftm()));
     }
 
-    /*
     function testAreYouTrying() public {
-        startingBalance = want.balanceOf(deployer);
-        depositAmount = startingBalance.div(2);
+        uint256 amount = WANT.balanceOf(address(this));
 
-        depositChecked(depositAmount);
+        depositChecked(amount);
+        earnChecked();
 
-        available = sett.available();
-        assertGt(available, 0);
-
-        sett.earn();
-
-        vm.roll(10000 * 13);
-
-        assertEq(want.balanceOf(sett), depositAmount - available);
-
-        assertLt(want.balanceOf(strategy), available);
-
-        assertEq(want.balanceOf(strategy), 0);
-
-        vm.expectEmit(true, false, false, true);
-        emit Harvest(0, block.number);
-
-        harvest = strategy.harvest();
+        skip(1 days);
+        harvestChecked();
     }
 
-    function testPerformanceFees() public {
-        startingBalance = want.balanceOf(deployer);
-        depositAmount = startingBalance.div(2);
+    function testPerformanceFees(
+        uint16 _performanceFeeGovernance,
+        uint16 _performanceFeeStrategist
+    ) public {
+        vm.assume(
+            _performanceFeeGovernance + _performanceFeeStrategist <= MAX_BPS
+        );
 
-        sett.deposit(depositAmount);
+        uint256 amount = WANT.balanceOf(address(this));
 
-        available = sett.available();
-        assertGt(available, 0);
+        depositChecked(amount);
+        earnChecked();
 
-        sett.earn();
+        strategy.setPerformanceFeeGovernance(_performanceFeeGovernance);
+        strategy.setPerformanceFeeStrategist(_performanceFeeStrategist);
 
-        vm.roll(1 days);
-
-        assertEq(want.balanceOf(sett), depositAmount - available);
-
-        assertLt(want.balanceOf(strategy), available);
-
-        assertEq(want.balanceOf(strategy), 0);
-
-        harvest = strategy.harvest();
+        skip(1 days);
+        harvestChecked();
     }
 
-    function stateSetup() public { 
-        startingBalance = want.balanceOf(deployer);
-
-        depositAmount = startingBalance.mul(8).div(10);
-
-        want.approve(sett, type(uint256).max);
-        sett.deposit(depositAmount);
-
-        vm.roll(1 days);
-
-        vm.prank(keeper);
-        sett.earn();
-
-        vm.roll(1 days);
-
-        if (strategy.isTendable()) {
-            strategy.tend()
-        }
-
-        vm.prank(keeper);
-        strategy.harvest();
-
-        vm.roll(1 days);
-    }
-
-
-    function testStrategyActionPermissions() public {
-        state_setup(deployer, sett, controller, strategy, want)
-
-        tendable = strategy.isTendable()
-
-        authorizedActors = [
-            strategy.governance(),
-            strategy.keeper(),
-        ]
-
+    function testDepositIsProtected() public {
         vm.expectRevert("onlyAuthorizedActorsOrController");
         strategy.deposit();
+    }
 
-        for actor in authorizedActors:
-            strategy.deposit({"from": actor})
+    function testGovernanceCanDeposit() public {
+        vm.prank(governance);
+        strategy.deposit();
+    }
 
-        for actor in authorizedActors:
-            chain.sleep(10000 * 13)
-            strategy.harvest({"from": actor})
+    function testKeeperCanDeposit() public {
+        vm.prank(keeper);
+        strategy.deposit();
+    }
 
+    function testHarvestIsProtected() public {
         vm.expectRevert("onlyAuthorizedActors");
         strategy.harvest();
-
-        if tendable:
-            with brownie.reverts("onlyAuthorizedActors"):
-                strategy.tend({"from": randomUser})
-
-            for actor in authorizedActors:
-                strategy.tend({"from": actor})
-
-        actorsToCheck = [
-            randomUser,
-            strategy.governance(),
-            strategy.strategist(),
-            strategy.keeper(),
-        ]
-
-        # withdrawAll onlyController
-        for actor in actorsToCheck:
-            with brownie.reverts("onlyController"):
-                strategy.withdrawAll({"from": actor})
-
-        # withdraw onlyController
-        for actor in actorsToCheck:
-            with brownie.reverts("onlyController"):
-                strategy.withdraw(1, {"from": actor})
-
-        # withdrawOther _onlyNotProtectedTokens
-        for actor in actorsToCheck:
-            with brownie.reverts("onlyController"):
-                strategy.withdrawOther(controller, {"from": actor})
     }
 
-
-    function testStrategyConfigPermissions() public {
-        randomUser = accounts[6]
-
-        randomUser = accounts[8]
-        # End Setup
-
-        governance = strategy.governance()
-
-        # Valid User should update
-        strategy.setGuardian(AddressZero, {"from": governance})
-        assert strategy.guardian() == AddressZero
-
-        strategy.setWithdrawalFee(0, {"from": governance})
-        assert strategy.withdrawalFee() == 0
-
-        strategy.setPerformanceFeeStrategist(0, {"from": governance})
-        assert strategy.performanceFeeStrategist() == 0
-
-        strategy.setPerformanceFeeGovernance(0, {"from": governance})
-        assert strategy.performanceFeeGovernance() == 0
-
-        strategy.setController(AddressZero, {"from": governance})
-        assert strategy.controller() == AddressZero
-
-        # Invalid User should fail
-        with brownie.reverts("onlyGovernance"):
-            strategy.setGuardian(AddressZero, {"from": randomUser})
-
-        with brownie.reverts("onlyGovernance"):
-            strategy.setWithdrawalFee(0, {"from": randomUser})
-
-        with brownie.reverts("onlyGovernance"):
-            strategy.setPerformanceFeeStrategist(0, {"from": randomUser})
-
-        with brownie.reverts("onlyGovernance"):
-            strategy.setPerformanceFeeGovernance(0, {"from": randomUser})
-
-        with brownie.reverts("onlyGovernance"):
-            strategy.setController(AddressZero, {"from": randomUser})
-
-        # Harvest:
-        strategy.setPerformanceFeeGovernance(0, {"from": governance})
-        assert strategy.performanceFeeGovernance() == 0
-
-        strategy.setPerformanceFeeStrategist(0, {"from": governance})
-        assert strategy.performanceFeeStrategist() == 0
-
-        with brownie.reverts("onlyGovernance"):
-            strategy.setPerformanceFeeGovernance(0, {"from": randomUser})
-
-        with brownie.reverts("onlyGovernance"):
-            strategy.setPerformanceFeeStrategist(0, {"from": randomUser})
+    function testGovernanceCanHarvest() public {
+        vm.prank(governance);
+        strategy.deposit();
     }
 
-    function testStrategyConfigPermissions() public {
-        vm.expectRevert("onlyGovernance");
+    function testKeeperCanHarvest() public {
+        vm.prank(keeper);
+        strategy.deposit();
+    }
+
+    function testWithdrawIsProtected() public {
+        address[4] memory actors = [
+            address(this),
+            governance,
+            strategist,
+            keeper
+        ];
+        uint256 length = actors.length;
+
+        for (uint256 i; i < length; ++i) {
+            vm.prank(actors[i]);
+            vm.expectRevert("onlyController");
+            strategy.withdraw(1);
+        }
+    }
+
+    function testWithdrawAllIsProtected() public {
+        address[4] memory actors = [
+            address(this),
+            governance,
+            strategist,
+            keeper
+        ];
+        uint256 length = actors.length;
+
+        for (uint256 i; i < length; ++i) {
+            vm.prank(actors[i]);
+            vm.expectRevert("onlyController");
+            strategy.withdrawAll();
+        }
+    }
+
+    function testWithdrawOtherIsProtected() public {
+        address[4] memory actors = [
+            address(this),
+            governance,
+            strategist,
+            keeper
+        ];
+        uint256 length = actors.length;
+
+        for (uint256 i; i < length; ++i) {
+            vm.prank(actors[i]);
+            vm.expectRevert("onlyController");
+            strategy.withdrawOther(address(controller));
+        }
+    }
+
+    function testSetGuardian() public {
+        vm.prank(governance);
         strategy.setGuardian(address(0));
 
-        vm.expectRevert("onlyGovernance");
-        strategy.setWithdrawalFee(0);
+        assertEq(strategy.guardian(), address(0));
+    }
 
+    function testSetGuardianIsProtected() public {
         vm.expectRevert("onlyGovernance");
-        strategy.setPerformanceFeeStrategist(0);
+        strategy.setGuardian(address(0));
+    }
 
-        vm.expectRevert("onlyGovernance");
-        strategy.setPerformanceFeeGovernance(0);
-
-        vm.expectRevert("onlyGovernance");
+    function testSetController() public {
+        vm.prank(governance);
         strategy.setController(address(0));
 
+        assertEq(strategy.controller(), address(0));
+    }
+
+    function testSetControllerIsProtected() public {
         vm.expectRevert("onlyGovernance");
+        strategy.setController(address(0));
+    }
+
+    function testSetPerformanceFeeGovernance() public {
+        vm.prank(governance);
         strategy.setPerformanceFeeGovernance(0);
 
+        assertEq(strategy.performanceFeeGovernance(), 0);
+    }
+
+    function testSetPerformanceFeeGovernanceIsProtected() public {
         vm.expectRevert("onlyGovernance");
+        strategy.setPerformanceFeeGovernance(0);
+    }
+
+    function testSetPerformanceFeeStrategist() public {
+        vm.prank(governance);
         strategy.setPerformanceFeeStrategist(0);
 
-        strategy.setPerformanceFeeGovernance(0, {"from": governance})
-        assert strategy.performanceFeeGovernance() == 0
-
-        strategy.setPerformanceFeeStrategist(0, {"from": governance})
-        assert strategy.performanceFeeStrategist() == 0
-
+        assertEq(strategy.performanceFeeStrategist(), 0);
     }
 
+    function testSetPerformanceFeeStrategistIsProtected() public {
+        vm.expectRevert("onlyGovernance");
+        strategy.setPerformanceFeeStrategist(0);
+    }
 
-    function testStrategyPausingPermissions() public {
-        state_setup(deployer, sett, controller, strategy, want)
+    function testSetWithdrawalFee() public {
+        vm.prank(governance);
+        strategy.setWithdrawalFee(0);
 
-        authorizedPausers = [
-            strategy.governance(),
-            strategy.guardian(),
-        ]
+        assertEq(strategy.withdrawalFee(), 0);
+    }
 
-        authorizedUnpausers = [
-            strategy.governance(),
-        ]
+    function testSetWithdrawalFeeIsProtected() public {
+        vm.expectRevert("onlyGovernance");
+        strategy.setWithdrawalFee(0);
+    }
 
-        vm.expectRevert("onlyPausers"):
+    function testGovernanceCanPause() public {
+        vm.prank(governance);
         strategy.pause();
 
-        vm.expectRevert("onlyGovernance"):
+        assertTrue(strategy.paused());
+    }
+
+    function testGuardianCanPause() public {
+        vm.prank(guardian);
+        strategy.pause();
+
+        assertTrue(strategy.paused());
+    }
+
+    function testPauseIsProtected() public {
+        vm.expectRevert("onlyPausers");
+        strategy.pause();
+    }
+
+    function testGovernanceCanUnpause() public {
+        vm.prank(guardian);
+        strategy.pause();
+
+        vm.prank(governance);
         strategy.unpause();
 
-        vm.prank(guardian);
-        strategy.pause()
+        assertTrue(!strategy.paused());
+    }
 
-        vm.expectRevert("Pausable: paused"):
-        sett.withdrawAll();
+    function testUnpauseIsProtected() public {
+        address[2] memory actors = [address(this), guardian];
+        uint256 length = actors.length;
 
-        vm.expectRevert("Pausable: paused"):
-        strategy.harvest();
-
-        if (strategy.isTendable()) {
-            vm.expectRevert("Pausable: paused"):
-            strategy.tend();
+        for (uint256 i; i < length; ++i) {
+            vm.prank(actors[i]);
+            vm.expectRevert("onlyGovernance");
+            strategy.unpause();
         }
-
-        strategy.unpause({"from": authorizedUnpausers[0]})
-
-        for pauser in authorizedPausers:
-            strategy.pause({"from": pauser})
-            strategy.unpause({"from": authorizedUnpausers[0]})
-
-        for unpauser in authorizedUnpausers:
-            strategy.pause({"from": unpauser})
-            strategy.unpause({"from": unpauser})
-
-        sett.deposit(1, {"from": deployer})
-        sett.withdraw(1, {"from": deployer})
-        sett.withdrawAll({"from": deployer})
-
-        strategy.harvest({"from": strategyKeeper})
-        if strategy.isTendable():
-            strategy.tend({"from": strategyKeeper})
     }
 
-
-    function testSettPausingPermissions() public {
-        # Setup
-        state_setup(deployer, sett, controller, strategy, want)
-        randomUser = accounts[8]
-        # End Setup
-
-        assert sett.strategist() == AddressZero
-        # End Setup
-
-        authorizedPausers = [
-            sett.governance(),
-            sett.guardian(),
-        ]
-
-        authorizedUnpausers = [
-            sett.governance(),
-        ]
-
-        # pause onlyPausers
-        for pauser in authorizedPausers:
-            sett.pause({"from": pauser})
-            sett.unpause({"from": authorizedUnpausers[0]})
-
-        with brownie.reverts("onlyPausers"):
-            sett.pause({"from": randomUser})
-
-        # unpause onlyPausers
-        for unpauser in authorizedUnpausers:
-            sett.pause({"from": unpauser})
-            sett.unpause({"from": unpauser})
-
-        sett.pause({"from": sett.guardian()})
-        with brownie.reverts("onlyGovernance"):
-            sett.unpause({"from": randomUser})
-
-        settKeeper = accounts.at(sett.keeper(), force=True)
-
-        with brownie.reverts("Pausable: paused"):
-            sett.earn({"from": settKeeper})
-        with brownie.reverts("Pausable: paused"):
-            sett.withdrawAll({"from": deployer})
-        with brownie.reverts("Pausable: paused"):
-            sett.withdraw(1, {"from": deployer})
-        with brownie.reverts("Pausable: paused"):
-            sett.deposit(1, {"from": randomUser})
-        with brownie.reverts("Pausable: paused"):
-            sett.depositAll({"from": randomUser})
-
-        sett.unpause({"from": authorizedUnpausers[0]})
-
-        sett.deposit(1, {"from": deployer})
-        sett.earn({"from": settKeeper})
-        sett.withdraw(1, {"from": deployer})
-        sett.withdrawAll({"from": deployer})
+    function testWithdrawAllFailsWhenPaused() public {
+        vm.prank(address(controller));
+        vm.expectRevert("Pausable: paused");
+        sett.withdrawAll();
     }
 
-
-    function testSettConfigPermissions() public {
-        state_setup(deployer, sett, controller, strategy, want)
-        randomUser = accounts[8]
-        assert sett.strategist() == AddressZero
-        # End Setup
-
-        # == Governance ==
-        validActor = sett.governance()
-
-        # setMin
-        with brownie.reverts("onlyGovernance"):
-            sett.setMin(0, {"from": randomUser})
-
-        sett.setMin(0, {"from": validActor})
-        assert sett.min() == 0
-
-        # setController
-        with brownie.reverts("onlyGovernance"):
-            sett.setController(AddressZero, {"from": randomUser})
-
-        sett.setController(AddressZero, {"from": validActor})
-        assert sett.controller() == AddressZero
-
-        # setStrategist
-        with brownie.reverts("onlyGovernance"):
-            sett.setStrategist(validActor, {"from": randomUser})
-
-        sett.setStrategist(validActor, {"from": validActor})
-        assert sett.strategist() == validActor
-
-        with brownie.reverts("onlyGovernance"):
-            sett.setKeeper(validActor, {"from": randomUser})
-
-        sett.setKeeper(validActor, {"from": validActor})
-        assert sett.keeper() == validActor
+    function testGovernanceCanEarn() public {
+        vm.prank(governance);
+        sett.earn();
     }
 
-
-    function testSettEarnPermissions() public {
-        # Setup
-        state_setup(deployer, sett, controller, strategy, want)
-        randomUser = accounts[8]
-        assert sett.strategist() == AddressZero
-        # End Setup
-
-        # == Authorized Actors ==
-        # earn
-
-        authorizedActors = [
-            sett.governance(),
-            sett.keeper(),
-        ]
-
-        with brownie.reverts("onlyAuthorizedActors"):
-            sett.earn({"from": randomUser})
-
-        for actor in authorizedActors:
-            chain.snapshot()
-            sett.earn({"from": actor})
-            chain.revert()
+    function testKeeperCanEarn() public {
+        vm.prank(keeper);
+        sett.earn();
     }
 
+    function testEarnIsProtected() public {
+        vm.expectRevert("onlyAuthorizedActors");
+        sett.earn();
+    }
+
+    function testSetMin() public {
+        vm.prank(governance);
+        sett.setMin(0);
+
+        assertEq(sett.min(), 0);
+    }
+
+    function testSetMinIsProtected() public {
+        vm.expectRevert("onlyGovernance");
+        sett.setMin(0);
+    }
+
+    function testSettSetController() public {
+        vm.prank(governance);
+        sett.setController(address(0));
+
+        assertEq(sett.controller(), address(0));
+    }
+
+    function testSettSetControllerIsProtected() public {
+        vm.expectRevert("onlyGovernance");
+        sett.setController(address(0));
+    }
+
+    function testSetStrategist() public {
+        vm.prank(governance);
+        sett.setStrategist(address(0));
+
+        assertEq(sett.strategist(), address(0));
+    }
+
+    function testSetStrategistIsProtected() public {
+        vm.expectRevert("onlyGovernance");
+        sett.setStrategist(address(0));
+    }
+
+    function testSetKeeper() public {
+        vm.prank(governance);
+        sett.setKeeper(address(0));
+
+        assertEq(sett.keeper(), address(0));
+    }
+
+    function testSetKeeperIsProtected() public {
+        vm.expectRevert("onlyGovernance");
+        sett.setKeeper(address(0));
+    }
+
+    function testSettGovernanceCanPause() public {
+        vm.prank(governance);
+        sett.pause();
+
+        assertTrue(sett.paused());
+    }
+
+    function testSettGuardianCanPause() public {
+        vm.prank(guardian);
+        sett.pause();
+
+        assertTrue(sett.paused());
+    }
+
+    function testSettPauseIsProtected() public {
+        vm.expectRevert("onlyPausers");
+        sett.pause();
+    }
 
     /// ===========================
     /// ===== Lifecycle Tests =====
     /// ===========================
 
-    MAX_BASIS = 10000
+    // TODO: Maybe remove withdrawal fees here?
+    function testHarvestFlow() public {
+        uint256 amount = WANT.balanceOf(address(this));
 
-    function testIsProfitable() public {
-        deployer = deployed.deployer
-        vault = deployed.vault
-        controller = deployed.controller
-        strategy = deployed.strategy
-        want = deployed.want
-        randomUser = accounts[6]
+        uint256 shares = depositChecked(amount);
+        earnChecked();
 
-        initial_balance = want.balanceOf(deployer)
+        skip(1 days);
+        harvestChecked();
 
-        settKeeper = accounts.at(vault.keeper(), force=True)
+        uint256 amountAfter = withdrawChecked(shares);
 
-        snap = SnapshotManager(vault, strategy, controller, "StrategySnapshot")
-
-        # Deposit
-        assert want.balanceOf(deployer) > 0
-
-        depositAmount = int(want.balanceOf(deployer) * 0.8)
-        assert depositAmount > 0
-
-        want.approve(vault.address, MaxUint256, {"from": deployer})
-
-        snap.settDeposit(depositAmount, {"from": deployer})
-
-        # Earn
-        with brownie.reverts("onlyAuthorizedActors"):
-            vault.earn({"from": randomUser})
-
-        min = vault.min()
-        max = vault.max()
-        remain = max - min
-
-        snap.settEarn({"from": settKeeper})
-
-        chain.sleep(15)
-        chain.mine(1)
-
-        snap.settWithdrawAll({"from": deployer})
-
-        ending_balance = want.balanceOf(deployer)
-
-        initial_balance_with_fees = initial_balance * (
-            1 - (DEFAULT_WITHDRAWAL_FEE / MAX_BASIS)
-        )
-
-        print("Initial Balance")
-        print(initial_balance)
-        print("initial_balance_with_fees")
-        print(initial_balance_with_fees)
-        print("Ending Balance")
-        print(ending_balance)
-
-        assert ending_balance > initial_balance_with_fees
+        assertGt(amountAfter, amount);
     }
 
-
-    function testDepositWithdrawSingleUserFlow() public {
-        # Setup
-        snap = SnapshotManager(vault, strategy, controller, "StrategySnapshot")
-        randomUser = accounts[6]
-        # End Setup
-
-        # Deposit
-        assert want.balanceOf(deployer) > 0
-
-        depositAmount = int(want.balanceOf(deployer) * 0.8)
-        assert depositAmount > 0
-
-        want.approve(vault.address, MaxUint256, {"from": deployer})
-
-        snap.settDeposit(depositAmount, {"from": deployer})
-
-        shares = vault.balanceOf(deployer)
-
-        # Earn
-        with brownie.reverts("onlyAuthorizedActors"):
-            vault.earn({"from": randomUser})
-
-        snap.settEarn({"from": settKeeper})
-
-        chain.sleep(15)
-        chain.mine(1)
-
-        snap.settWithdraw(shares // 2, {"from": deployer})
-
-        chain.sleep(10000)
-        chain.mine(1)
-
-        snap.settWithdraw(shares // 2 - 1, {"from": deployer})
+    function testDepositOnce() public {
+        uint256 amount = WANT.balanceOf(address(this));
+        depositChecked(amount);
     }
 
+    function testEarn() public {
+        uint256 amount = WANT.balanceOf(address(this));
 
-    function testSingleUserHarvestFlow() public {
-        # Setup
-        snap = SnapshotManager(vault, strategy, controller, "StrategySnapshot")
-        randomUser = accounts[6]
-        tendable = strategy.isTendable()
-        startingBalance = want.balanceOf(deployer)
-        depositAmount = startingBalance // 2
-        assert startingBalance >= depositAmount
-        assert startingBalance >= 0
-        # End Setup
-
-        # Deposit
-        want.approve(sett, MaxUint256, {"from": deployer})
-        snap.settDeposit(depositAmount, {"from": deployer})
-        shares = vault.balanceOf(deployer)
-
-        assert want.balanceOf(sett) > 0
-        print("want.balanceOf(sett)", want.balanceOf(sett))
-
-        # Earn
-        snap.settEarn({"from": settKeeper})
-
-        if tendable:
-            with brownie.reverts("onlyAuthorizedActors"):
-                strategy.tend({"from": randomUser})
-
-            snap.settTend({"from": strategyKeeper})
-
-        chain.sleep(days(0.5))
-        chain.mine()
-
-        if tendable:
-            snap.settTend({"from": strategyKeeper})
-
-        chain.sleep(days(14))
-        voter.distribute({'from': deployer})
-
-        with brownie.reverts("onlyAuthorizedActors"):
-            strategy.harvest({"from": randomUser})
-
-        snap.settHarvest({"from": strategyKeeper})
-
-        chain.sleep(days(1))
-        chain.mine()
-
-        if tendable:
-            snap.settTend({"from": strategyKeeper})
-
-        snap.settWithdraw(shares // 2, {"from": deployer})
-
-        chain.sleep(days(3))
-        chain.mine()
-
-        snap.settHarvest({"from": strategyKeeper})
-        snap.settWithdraw(shares // 2 - 1, {"from": deployer})
+        depositChecked(amount);
+        earnChecked();
     }
 
+    function testWithdrawOnce() public {
+        uint256 amount = WANT.balanceOf(address(this));
 
-    function testMigrateSingleUser() public {
-        # Setup
-        randomUser = accounts[6]
-        snap = SnapshotManager(vault, strategy, controller, "StrategySnapshot")
+        uint256 shares = depositChecked(amount);
+        earnChecked();
 
-        startingBalance = want.balanceOf(deployer)
-        depositAmount = startingBalance // 2
-        assert startingBalance >= depositAmount
-        # End Setup
-
-        # Deposit
-        want.approve(sett, MaxUint256, {"from": deployer})
-        snap.settDeposit(depositAmount, {"from": deployer})
-
-        chain.sleep(15)
-        chain.mine()
-
-        sett.earn({"from": strategist})
-
-        chain.snapshot()
-
-        # Test no harvests
-        chain.sleep(days(2))
-        chain.mine()
-
-        before = {"settWant": want.balanceOf(sett), "stratWant": strategy.balanceOf()}
-
-        with brownie.reverts():
-            controller.withdrawAll(strategy.want(), {"from": randomUser})
-
-        controller.withdrawAll(strategy.want(), {"from": deployer})
-
-        after = {"settWant": want.balanceOf(sett), "stratWant": strategy.balanceOf()}
-
-        assert after["settWant"] > before["settWant"]
-        assert after["stratWant"] < before["stratWant"]
-        assert after["stratWant"] == 0
-
-        # Test tend only
-        if strategy.isTendable():
-            chain.revert()
-
-            chain.sleep(days(2))
-            chain.mine()
-
-            strategy.tend({"from": deployer})
-
-            before = {"settWant": want.balanceOf(sett), "stratWant": strategy.balanceOf()}
-
-            with brownie.reverts():
-                controller.withdrawAll(strategy.want(), {"from": randomUser})
-
-            controller.withdrawAll(strategy.want(), {"from": deployer})
-
-            after = {"settWant": want.balanceOf(sett), "stratWant": strategy.balanceOf()}
-
-            assert after["settWant"] > before["settWant"]
-            assert after["stratWant"] < before["stratWant"]
-            assert after["stratWant"] == 0
-
-        # Test harvest, with tend if tendable
-        chain.revert()
-
-        chain.sleep(days(1))
-        chain.mine()
-
-        if strategy.isTendable():
-            strategy.tend({"from": deployer})
-
-        chain.sleep(days(1))
-        chain.mine()
-
-        before = {
-            "settWant": want.balanceOf(sett),
-            "stratWant": strategy.balanceOf(),
-            "rewardsWant": want.balanceOf(controller.rewards()),
-        }
-
-        with brownie.reverts():
-            controller.withdrawAll(strategy.want(), {"from": randomUser})
-
-        controller.withdrawAll(strategy.want(), {"from": deployer})
-
-        after = {"settWant": want.balanceOf(sett), "stratWant": strategy.balanceOf()}
-
-        assert after["settWant"] > before["settWant"]
-        assert after["stratWant"] < before["stratWant"]
-        assert after["stratWant"] == 0
+        // vm.roll(block.number + 1);
+        withdrawChecked(shares);
     }
 
+    function testWithdrawTwice() public {
+        uint256 amount = WANT.balanceOf(address(this));
 
-    function testWithdrawOther() public {
-        """
-        - Controller should be able to withdraw other tokens
-        - Controller should not be able to withdraw core tokens
-        - Non-controller shouldn't be able to do either
-        """
-        # Setup
-        randomUser = accounts[6]
-        startingBalance = want.balanceOf(deployer)
-        depositAmount = startingBalance // 2
-        assert startingBalance >= depositAmount
-        # End Setup
+        uint256 shares = depositChecked(amount);
+        earnChecked();
 
-        # Deposit
-        want.approve(sett, MaxUint256, {"from": deployer})
-        sett.deposit(depositAmount, {"from": deployer})
-
-        chain.sleep(15)
-        chain.mine()
-
-        sett.earn({"from": deployer})
-
-        chain.sleep(days(0.5))
-        chain.mine()
-
-        if strategy.isTendable():
-            strategy.tend({"from": deployer})
-
-        strategy.harvest({"from": deployer})
-
-        chain.sleep(days(0.5))
-        chain.mine()
-
-        mockAmount = Wei("1000 ether")
-        mockToken = MockToken.deploy({"from": deployer})
-        mockToken.initialize([strategy], [mockAmount], {"from": deployer})
-
-        assert mockToken.balanceOf(strategy) == mockAmount
-
-        # Should not be able to withdraw protected tokens
-        protectedTokens = strategy.getProtectedTokens()
-        for token in protectedTokens:
-            with brownie.reverts():
-                controller.inCaseStrategyTokenGetStuck(strategy, token, {"from": deployer})
-
-        # Should send balance of non-protected token to sender
-        controller.inCaseStrategyTokenGetStuck(strategy, mockToken, {"from": deployer})
-
-        with brownie.reverts():
-            controller.inCaseStrategyTokenGetStuck(
-                strategy, mockToken, {"from": randomUser}
-            )
-
-        assert mockToken.balanceOf(controller) == mockAmount
+        withdrawChecked(shares.div(2));
+        withdrawChecked(shares.sub(shares.div(2)));
     }
 
+    function testWithdrawAll() public {
+        uint256 amount = WANT.balanceOf(address(this));
 
-    function testSingleUserHarvestFlowRemoveFees() public {
-        # Setup
-        randomUser = accounts[6]
-        snap = SnapshotManager(vault, strategy, controller, "StrategySnapshot")
-        startingBalance = want.balanceOf(deployer)
-        tendable = strategy.isTendable()
-        startingBalance = want.balanceOf(deployer)
-        depositAmount = startingBalance // 2
-        assert startingBalance >= depositAmount
-        # End Setup
+        depositChecked(amount);
+        earnChecked();
 
-        # Deposit
-        want.approve(sett, MaxUint256, {"from": deployer})
-        snap.settDeposit(depositAmount, {"from": deployer})
-
-        # Earn
-        snap.settEarn({"from": deployer})
-
-        chain.sleep(days(0.5))
-        chain.mine()
-
-        if tendable:
-            snap.settTend({"from": deployer})
-
-        chain.sleep(days(14))
-        voter.distribute({'from': deployer})
-
-        with brownie.reverts("onlyAuthorizedActors"):
-            strategy.harvest({"from": randomUser})
-
-        snap.settHarvest({"from": deployer})
-
-        ## NOTE: Some strats do not do this, change accordingly
-        # assert want.balanceOf(controller.rewards()) > 0
-
-        chain.sleep(days(1))
-        chain.mine()
-
-        if tendable:
-            snap.settTend({"from": deployer})
-
-        chain.sleep(days(3))
-        chain.mine()
-
-        snap.settHarvest({"from": deployer})
-
-        snap.settWithdrawAll({"from": deployer})
-
-        endingBalance = want.balanceOf(deployer)
-
-        print("Report after 4 days")
-        print("Gains")
-        print(endingBalance - startingBalance)
-        print("gainsPercentage")
-        print((endingBalance - startingBalance) / startingBalance)
+        controllerWithrawAllChecked();
     }
-  */
 
     /// ============================
     /// ===== Internal helpers =====
     /// ============================
 
-    function depositCheckedFrom(address _from, uint256 _amount) internal {
+    function depositCheckedFrom(address _from, uint256 _amount)
+        internal
+        returns (uint256 shares_)
+    {
         comparator.addCall(
             "want.balanceOf(from)",
             address(WANT),
@@ -988,7 +571,7 @@ contract StrategySolidexStakerTest is DSTest, stdCheats, Utils, Config {
         );
 
         comparator.snapPrev();
-        vm.startPrank(_from);
+        vm.startPrank(_from, _from);
 
         WANT.approve(address(sett), _amount);
         sett.deposit(_amount);
@@ -999,10 +582,15 @@ contract StrategySolidexStakerTest is DSTest, stdCheats, Utils, Config {
         comparator.assertNegDiff("want.balanceOf(from)", _amount);
         comparator.assertDiff("want.balanceOf(sett)", _amount);
         comparator.assertDiff("sett.balanceOf(from)", expectedShares);
+
+        shares_ = comparator.diff("sett.balanceOf(from)");
     }
 
-    function depositChecked(uint256 _amount) internal {
-        depositCheckedFrom(address(this), _amount);
+    function depositChecked(uint256 _amount)
+        internal
+        returns (uint256 shares_)
+    {
+        shares_ = depositCheckedFrom(address(this), _amount);
     }
 
     function earnChecked() internal {
@@ -1017,9 +605,10 @@ contract StrategySolidexStakerTest is DSTest, stdCheats, Utils, Config {
             abi.encodeWithSignature("balanceOfPool()")
         );
 
-        uint256 expectedEarn = WANT.balanceOf(address(sett)).mul(
-            MAX_BPS.sub(sett.min()).div(MAX_BPS)
-        );
+        uint256 expectedEarn = WANT
+            .balanceOf(address(sett))
+            .mul(sett.min())
+            .div(MAX_BPS);
 
         comparator.snapPrev();
         vm.prank(keeper);
@@ -1032,7 +621,10 @@ contract StrategySolidexStakerTest is DSTest, stdCheats, Utils, Config {
         comparator.assertDiff("strategy.balanceOfPool()", expectedEarn);
     }
 
-    function withdrawCheckedFrom(address _from, uint256 _shares) internal {
+    function withdrawCheckedFrom(address _from, uint256 _shares)
+        internal
+        returns (uint256 amount_)
+    {
         comparator.addCall(
             "sett.balanceOf(from)",
             address(sett),
@@ -1069,7 +661,7 @@ contract StrategySolidexStakerTest is DSTest, stdCheats, Utils, Config {
         );
 
         comparator.snapPrev();
-        vm.prank(_from);
+        vm.prank(_from, _from);
 
         sett.withdraw(_shares);
 
@@ -1105,10 +697,15 @@ contract StrategySolidexStakerTest is DSTest, stdCheats, Utils, Config {
             );
             comparator.assertDiff("want.balanceOf(treasury)", fee);
         }
+
+        amount_ = comparator.diff("want.balanceOf(from)");
     }
 
-    function withdrawChecked(uint256 _shares) internal {
-        withdrawCheckedFrom(address(this), _shares);
+    function withdrawChecked(uint256 _shares)
+        internal
+        returns (uint256 amount_)
+    {
+        amount_ = withdrawCheckedFrom(address(this), _shares);
     }
 
     function harvestChecked() internal {
@@ -1128,9 +725,9 @@ contract StrategySolidexStakerTest is DSTest, stdCheats, Utils, Config {
         );
 
         comparator.addCall(
-            "bSolidSolidSex.balanceOf(governance)",
+            "bSolidSolidSex.balanceOf(treasury)",
             address(BSOLID_SOLIDSEX),
-            abi.encodeWithSignature("balanceOf(address)", governance)
+            abi.encodeWithSignature("balanceOf(address)", treasury)
         );
         comparator.addCall(
             "bSolidSolidSex.balanceOf(strategist)",
@@ -1144,9 +741,9 @@ contract StrategySolidexStakerTest is DSTest, stdCheats, Utils, Config {
         );
 
         comparator.addCall(
-            "bSexWftm.balanceOf(governance)",
+            "bSexWftm.balanceOf(treasury)",
             address(BSEX_WFTM),
-            abi.encodeWithSignature("balanceOf(address)", governance)
+            abi.encodeWithSignature("balanceOf(address)", treasury)
         );
         comparator.addCall(
             "bSexWftm.balanceOf(strategist)",
@@ -1159,10 +756,13 @@ contract StrategySolidexStakerTest is DSTest, stdCheats, Utils, Config {
             abi.encodeWithSignature("balanceOf(address)", BADGER_TREE)
         );
 
+        comparator.snapPrev();
+        vm.prank(keeper);
+
         if (performanceFeeGovernance > 0) {
             vm.expectEmit(true, true, true, false); // Not checking amount
             emit PerformanceFeeGovernance(
-                governance,
+                treasury,
                 address(BSOLID_SOLIDSEX),
                 0, // dummy
                 block.number,
@@ -1171,7 +771,7 @@ contract StrategySolidexStakerTest is DSTest, stdCheats, Utils, Config {
 
             vm.expectEmit(true, true, true, false); // Not checking amount
             emit PerformanceFeeGovernance(
-                governance,
+                treasury,
                 address(BSEX_WFTM),
                 0, // dummy
                 block.number,
@@ -1199,8 +799,6 @@ contract StrategySolidexStakerTest is DSTest, stdCheats, Utils, Config {
             );
         }
 
-        comparator.snapPrev();
-
         vm.expectEmit(true, false, false, true);
         emit Harvest(0, block.number);
 
@@ -1214,8 +812,8 @@ contract StrategySolidexStakerTest is DSTest, stdCheats, Utils, Config {
         comparator.assertEq("strategy.balanceOf()");
 
         {
-            uint256 deltaBSolidSolidSexBalanceOfGovernance = comparator.diff(
-                "bSolidSolidSex.balanceOf(governance)"
+            uint256 deltaBSolidSolidSexBalanceOfTreasury = comparator.diff(
+                "bSolidSolidSex.balanceOf(treasury)"
             );
             uint256 deltaBSolidSolidSexBalanceOfStrategist = comparator.diff(
                 "bSolidSolidSex.balanceOf(strategist)"
@@ -1224,32 +822,36 @@ contract StrategySolidexStakerTest is DSTest, stdCheats, Utils, Config {
                 "bSolidSolidSex.balanceOf(badgerTree)"
             );
 
-            uint256 bSolidSolidSexEmitted = deltaBSolidSolidSexBalanceOfGovernance
-                    .add(deltaBSolidSolidSexBalanceOfStrategist)
-                    .add(deltaBSolidSolidSexBalanceOfBadgerTree);
+            uint256 bSolidSolidSexEmitted = deltaBSolidSolidSexBalanceOfTreasury
+                .add(deltaBSolidSolidSexBalanceOfStrategist)
+                .add(deltaBSolidSolidSexBalanceOfBadgerTree);
+
+            uint256 bSolidSolidSexGovernanceFee = bSolidSolidSexEmitted
+                .mul(performanceFeeGovernance)
+                .div(MAX_BPS);
+            uint256 bSolidSolidSexStrategistFee = bSolidSolidSexEmitted
+                .mul(performanceFeeStrategist)
+                .div(MAX_BPS);
 
             assertEq(
-                deltaBSolidSolidSexBalanceOfGovernance,
-                bSolidSolidSexEmitted.mul(performanceFeeGovernance).div(MAX_BPS)
+                deltaBSolidSolidSexBalanceOfTreasury,
+                bSolidSolidSexGovernanceFee
             );
             assertEq(
                 deltaBSolidSolidSexBalanceOfStrategist,
-                bSolidSolidSexEmitted.mul(performanceFeeStrategist).div(MAX_BPS)
+                bSolidSolidSexStrategistFee
             );
             assertEq(
                 deltaBSolidSolidSexBalanceOfBadgerTree,
-                bSolidSolidSexEmitted.mul(
-                    MAX_BPS
-                        .sub(performanceFeeGovernance)
-                        .sub(performanceFeeStrategist)
-                        .div(MAX_BPS)
+                bSolidSolidSexEmitted.sub(bSolidSolidSexGovernanceFee).sub(
+                    bSolidSolidSexStrategistFee
                 )
             );
         }
 
         {
-            uint256 deltaBSexWftmBalanceOfGovernance = comparator.diff(
-                "bSexWftm.balanceOf(governance)"
+            uint256 deltaBSexWftmBalanceOfTreasury = comparator.diff(
+                "bSexWftm.balanceOf(treasury)"
             );
             uint256 deltaBSexWftmBalanceOfStrategist = comparator.diff(
                 "bSexWftm.balanceOf(strategist)"
@@ -1258,217 +860,52 @@ contract StrategySolidexStakerTest is DSTest, stdCheats, Utils, Config {
                 "bSexWftm.balanceOf(badgerTree)"
             );
 
-            uint256 bSexWftmEmitted = deltaBSexWftmBalanceOfGovernance
+            uint256 bSexWftmEmitted = deltaBSexWftmBalanceOfTreasury
                 .add(deltaBSexWftmBalanceOfStrategist)
                 .add(deltaBSexWftmBalanceOfBadgerTree);
 
-            assertEq(
-                deltaBSexWftmBalanceOfGovernance,
-                bSexWftmEmitted.mul(performanceFeeGovernance).div(MAX_BPS)
-            );
-            assertEq(
-                deltaBSexWftmBalanceOfStrategist,
-                bSexWftmEmitted.mul(performanceFeeStrategist).div(MAX_BPS)
-            );
+            uint256 bSexWftmGovernanceFee = bSexWftmEmitted
+                .mul(performanceFeeGovernance)
+                .div(MAX_BPS);
+            uint256 bSexWftmStrategistFee = bSexWftmEmitted
+                .mul(performanceFeeStrategist)
+                .div(MAX_BPS);
+
+            assertEq(deltaBSexWftmBalanceOfTreasury, bSexWftmGovernanceFee);
+            assertEq(deltaBSexWftmBalanceOfStrategist, bSexWftmStrategistFee);
             assertEq(
                 deltaBSexWftmBalanceOfBadgerTree,
-                bSexWftmEmitted.mul(
-                    MAX_BPS
-                        .sub(performanceFeeGovernance)
-                        .sub(performanceFeeStrategist)
-                        .div(MAX_BPS)
+                bSexWftmEmitted.sub(bSexWftmGovernanceFee).sub(
+                    bSexWftmStrategistFee
                 )
             );
         }
     }
-}
 
-// TODO: There has to be a better way to do this
+    function controllerWithrawAllChecked() internal {
+        comparator.addCall(
+            "want.balanceOf(sett)",
+            address(WANT),
+            abi.encodeWithSignature("balanceOf(address)", address(sett))
+        );
+        comparator.addCall(
+            "want.balanceOf(strategy)",
+            address(WANT),
+            abi.encodeWithSignature("balanceOf(address)", address(strategy))
+        );
 
-contract Snapshot {
-    mapping(string => uint256) private values;
-    mapping(string => bool) public exists;
+        comparator.snapPrev();
+        vm.prank(governance);
 
-    constructor(string[] memory _keys, uint256[] memory _vals) public {
-        uint256 length = _keys.length;
-        for (uint256 i; i < length; ++i) {
-            exists[_keys[i]] = true;
-            values[_keys[i]] = _vals[i];
-        }
-    }
+        controller.withdrawAll(strategy.want());
 
-    function valOf(string calldata _key) public view returns (uint256 val_) {
-        require(exists[_key], "Invalid key");
-        val_ = values[_key];
-    }
-}
+        comparator.snapCurr();
 
-// TODO: Ideally a library
-contract SnapshotUtils is DSTest {
-    using SafeMathUpgradeable for uint256;
-
-    function diff(
-        Snapshot _snap1,
-        Snapshot _snap2,
-        string calldata _key
-    ) public view returns (uint256 val_) {
-        val_ = _snap1.valOf(_key).sub(_snap2.valOf(_key));
-    }
-
-    function assertEq(
-        Snapshot _snap1,
-        Snapshot _snap2,
-        string calldata _key
-    ) public {
-        assertEq(_snap1.valOf(_key), _snap2.valOf(_key));
-    }
-
-    function assertGt(
-        Snapshot _snap1,
-        Snapshot _snap2,
-        string calldata _key
-    ) public {
-        assertGt(_snap1.valOf(_key), _snap2.valOf(_key));
-    }
-
-    function assertLt(
-        Snapshot _snap1,
-        Snapshot _snap2,
-        string calldata _key
-    ) public {
-        assertLt(_snap1.valOf(_key), _snap2.valOf(_key));
-    }
-
-    function assertGe(
-        Snapshot _snap1,
-        Snapshot _snap2,
-        string calldata _key
-    ) public {
-        assertGe(_snap1.valOf(_key), _snap2.valOf(_key));
-    }
-
-    function assertLe(
-        Snapshot _snap1,
-        Snapshot _snap2,
-        string calldata _key
-    ) public {
-        assertLe(_snap1.valOf(_key), _snap2.valOf(_key));
-    }
-
-    function assertDiff(
-        Snapshot _snap1,
-        Snapshot _snap2,
-        string calldata _key,
-        uint256 _diff
-    ) public {
-        assertEq(_snap1.valOf(_key).sub(_snap2.valOf(_key)), _diff);
-    }
-}
-
-struct Call {
-    address target;
-    bytes callData;
-}
-
-interface IMulticall {
-    function aggregate(Call[] memory calls)
-        external
-        returns (uint256 blockNumber, bytes[] memory returnData);
-}
-
-contract SnapshotManager {
-    IMulticall multicall;
-
-    string[] private keys;
-    mapping(string => bool) public exists;
-
-    Call[] private calls;
-
-    constructor(address _multicall) public {
-        multicall = IMulticall(_multicall);
-    }
-
-    function addCall(
-        string calldata _key,
-        address _target,
-        bytes calldata _callData
-    ) public {
-        if (!exists[_key]) {
-            exists[_key] = true;
-            keys.push(_key);
-            calls.push(Call(_target, _callData));
-        }
-    }
-
-    function snap() public returns (Snapshot snap_) {
-        (, bytes[] memory rdata) = multicall.aggregate(calls);
-        uint256 length = rdata.length;
-
-        uint256[] memory vals = new uint256[](length);
-        for (uint256 i; i < length; ++i) {
-            vals[i] = abi.decode(rdata[i], (uint256));
-        }
-
-        snap_ = new Snapshot(keys, vals);
-    }
-}
-
-contract SnapshotComparator is SnapshotManager, SnapshotUtils {
-    Snapshot private sCurr;
-    Snapshot private sPrev;
-
-    constructor(address _multicall) public SnapshotManager(_multicall) {}
-
-    function snapPrev() public {
-        sPrev = snap();
-    }
-
-    function snapCurr() public {
-        sCurr = snap();
-    }
-
-    function curr(string calldata _key) public view returns (uint256 val_) {
-        val_ = sCurr.valOf(_key);
-    }
-
-    function prev(string calldata _key) public view returns (uint256 val_) {
-        val_ = sPrev.valOf(_key);
-    }
-
-    function diff(string calldata _key) public view returns (uint256 val_) {
-        val_ = sPrev.valOf(_key);
-    }
-
-    function negDiff(string calldata _key) public view returns (uint256 val_) {
-        val_ = diff(sPrev, sCurr, _key);
-    }
-
-    function assertEq(string calldata _key) public {
-        assertEq(sCurr, sPrev, _key);
-    }
-
-    function assertGt(string calldata _key) public {
-        assertGt(sCurr, sPrev, _key);
-    }
-
-    function assertLt(string calldata _key) public {
-        assertLt(sCurr, sPrev, _key);
-    }
-
-    function assertGe(string calldata _key) public {
-        assertGe(sCurr, sPrev, _key);
-    }
-
-    function assertLe(string calldata _key) public {
-        assertLe(sCurr, sPrev, _key);
-    }
-
-    function assertDiff(string calldata _key, uint256 _diff) public {
-        assertDiff(sCurr, sPrev, _key, _diff);
-    }
-
-    function assertNegDiff(string calldata _key, uint256 _diff) public {
-        assertDiff(sPrev, sCurr, _key, _diff);
+        assertEq(comparator.curr("want.balanceOf(strategy)"), 0);
+        comparator.assertDiff(
+            "want.balanceOf(sett)",
+            comparator.prev("want.balanceOf(strategy)")
+        );
     }
 }
 
@@ -1476,6 +913,8 @@ contract SnapshotComparator is SnapshotManager, SnapshotUtils {
 TODO:
 - No upgradeable in test contract
 - Refactor everything
+- Generalize
 - Add guestlist
 - Add proxy
+- EOA lock
 */
